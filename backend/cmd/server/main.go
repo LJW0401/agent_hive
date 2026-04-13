@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/penguin/agent-hive/internal/container"
 	"github.com/penguin/agent-hive/internal/server"
 )
 
@@ -14,7 +15,8 @@ func main() {
 	dev := flag.Bool("dev", false, "enable dev mode (proxy to Vite dev server)")
 	flag.Parse()
 
-	srv := server.New(*dev)
+	mgr := container.NewManager()
+	srv := server.New(*dev, mgr)
 
 	addr := fmt.Sprintf(":%d", *port)
 	log.Printf("Agent Hive listening on http://localhost%s", addr)

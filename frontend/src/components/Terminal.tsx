@@ -3,40 +3,47 @@ import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 
-export default function Terminal() {
+interface TerminalProps {
+  containerId: string
+}
+
+const THEME = {
+  background: '#111114',
+  foreground: '#e5e7eb',
+  cursor: '#e5e7eb',
+  selectionBackground: '#374151',
+  black: '#1f2937',
+  red: '#ef4444',
+  green: '#22c55e',
+  yellow: '#eab308',
+  blue: '#3b82f6',
+  magenta: '#a855f7',
+  cyan: '#06b6d4',
+  white: '#e5e7eb',
+  brightBlack: '#6b7280',
+  brightRed: '#f87171',
+  brightGreen: '#4ade80',
+  brightYellow: '#facc15',
+  brightBlue: '#60a5fa',
+  brightMagenta: '#c084fc',
+  brightCyan: '#22d3ee',
+  brightWhite: '#f9fafb',
+}
+
+export default function Terminal({ containerId }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerm | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const fitAddonRef = useRef<FitAddon | null>(null)
 
   useEffect(() => {
     if (!containerRef.current) return
 
     const term = new XTerm({
       cursorBlink: true,
-      fontSize: 14,
+      fontSize: 13,
       fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, Monaco, 'Courier New', monospace",
-      theme: {
-        background: '#0a0a0b',
-        foreground: '#e5e7eb',
-        cursor: '#e5e7eb',
-        selectionBackground: '#374151',
-        black: '#1f2937',
-        red: '#ef4444',
-        green: '#22c55e',
-        yellow: '#eab308',
-        blue: '#3b82f6',
-        magenta: '#a855f7',
-        cyan: '#06b6d4',
-        white: '#e5e7eb',
-        brightBlack: '#6b7280',
-        brightRed: '#f87171',
-        brightGreen: '#4ade80',
-        brightYellow: '#facc15',
-        brightBlue: '#60a5fa',
-        brightMagenta: '#c084fc',
-        brightCyan: '#22d3ee',
-        brightWhite: '#f9fafb',
-      },
+      theme: THEME,
     })
 
     const fitAddon = new FitAddon()
@@ -44,22 +51,16 @@ export default function Terminal() {
     term.open(containerRef.current)
     fitAddon.fit()
     termRef.current = term
+    fitAddonRef.current = fitAddon
 
-    // WebSocket connection
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.host}/ws/terminal`
+    const wsUrl = `${protocol}//${window.location.host}/ws/terminal?id=${containerId}`
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
-
     ws.binaryType = 'arraybuffer'
 
     ws.onopen = () => {
-      // Send initial size
-      ws.send(JSON.stringify({
-        type: 'resize',
-        rows: term.rows,
-        cols: term.cols,
-      }))
+      ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }))
     }
 
     ws.onmessage = (event) => {
@@ -77,22 +78,16 @@ export default function Terminal() {
       term.write('\r\n\x1b[31m[Connection error]\x1b[0m\r\n')
     }
 
-    // Terminal input -> WebSocket
     term.onData((data) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(new TextEncoder().encode(data))
       }
     })
 
-    // Handle resize
     const handleResize = () => {
       fitAddon.fit()
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: 'resize',
-          rows: term.rows,
-          cols: term.cols,
-        }))
+        ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }))
       }
     }
 
@@ -104,13 +99,7 @@ export default function Terminal() {
       ws.close()
       term.dispose()
     }
-  }, [])
+  }, [containerId])
 
-  return (
-    <div
-      ref={containerRef}
-      className="w-full h-full"
-      style={{ padding: '8px' }}
-    />
-  )
+  return <div ref={containerRef} className="w-full h-full" />
 }
