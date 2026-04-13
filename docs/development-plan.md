@@ -10,17 +10,17 @@
 
 ### 后端
 
-- [ ] 初始化 Go 项目，搭建目录结构
-- [ ] 集成 creack/pty，实现单个 PTY 会话的创建与管理
-- [ ] 集成 gorilla/websocket，实现终端 I/O 的 WebSocket 通道
-- [ ] HTTP 服务，提供静态资源托管
+- [x] 初始化 Go 项目，搭建目录结构
+- [x] 集成 creack/pty，实现单个 PTY 会话的创建与管理
+- [x] 集成 gorilla/websocket，实现终端 I/O 的 WebSocket 通道
+- [x] HTTP 服务，提供静态资源托管
 
 ### 前端
 
-- [ ] 初始化 React + TypeScript + Vite 项目
-- [ ] 集成 Tailwind CSS + shadcn/ui，搭建深色主题基础样式
-- [ ] 集成 xterm.js，实现单个终端组件
-- [ ] WebSocket 连接后端，终端可正常输入输出
+- [x] 初始化 React + TypeScript + Vite 项目
+- [x] 集成 Tailwind CSS + shadcn/ui，搭建深色主题基础样式
+- [x] 集成 xterm.js，实现单个终端组件
+- [x] WebSocket 连接后端，终端可正常输入输出
 
 ### 验收标准
 
