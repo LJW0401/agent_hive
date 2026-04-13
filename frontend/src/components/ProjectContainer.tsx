@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { X, Pencil, Check } from 'lucide-react'
 import Terminal from './Terminal'
+import TodoList from './TodoList'
 import type { Container } from '../api'
 
 interface ProjectContainerProps {
@@ -71,11 +72,11 @@ export default function ProjectContainer({ container, onClose, onRename }: Proje
         </button>
       </div>
 
-      {/* Body: todo placeholder + terminal */}
+      {/* Body: todo list + terminal */}
       <div className="flex flex-1 min-h-0">
-        {/* Left: Todo area (placeholder for Phase 3) */}
-        <div className="w-48 shrink-0 border-r border-gray-800 p-2 hidden lg:block">
-          <span className="text-[10px] text-gray-600 uppercase tracking-wider">Todo</span>
+        {/* Left: Todo area */}
+        <div className="w-48 shrink-0 border-r border-gray-800 hidden lg:flex flex-col">
+          <TodoList containerID={container.id} />
         </div>
         {/* Right: Terminal */}
         <div className="flex-1 min-w-0 min-h-0">
