@@ -31,6 +31,27 @@ export async function renameContainer(id: string, name: string): Promise<void> {
   })
 }
 
+// --- Layout API ---
+
+export interface LayoutEntry {
+  containerId: string
+  page: number
+  position: number
+}
+
+export async function getLayout(): Promise<LayoutEntry[]> {
+  const res = await fetch('/api/layout')
+  return res.json()
+}
+
+export async function updateLayout(entries: LayoutEntry[]): Promise<void> {
+  await fetch('/api/layout', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(entries),
+  })
+}
+
 // --- Todo API ---
 
 export interface Todo {

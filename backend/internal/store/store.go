@@ -49,6 +49,12 @@ func migrate(db *sql.DB) error {
 			created_at DATETIME NOT NULL DEFAULT (datetime('now'))
 		);
 		CREATE INDEX IF NOT EXISTS idx_todos_container ON todos(container);
+
+		CREATE TABLE IF NOT EXISTS layouts (
+			container_id TEXT PRIMARY KEY,
+			page         INTEGER NOT NULL DEFAULT 0,
+			position     INTEGER NOT NULL DEFAULT 0
+		);
 	`)
 	return err
 }

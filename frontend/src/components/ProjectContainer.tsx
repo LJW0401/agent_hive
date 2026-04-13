@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { X, Pencil, Check } from 'lucide-react'
+import { X, Pencil, Check, ArrowLeft, ArrowRight } from 'lucide-react'
 import Terminal from './Terminal'
 import TodoList from './TodoList'
 import type { Container } from '../api'
@@ -8,9 +8,12 @@ interface ProjectContainerProps {
   container: Container
   onClose: (id: string) => void
   onRename: (id: string, name: string) => void
+  currentPage: number
+  totalPages: number
+  onMoveToPage: (containerId: string, page: number) => void
 }
 
-export default function ProjectContainer({ container, onClose, onRename }: ProjectContainerProps) {
+export default function ProjectContainer({ container, onClose, onRename, currentPage, totalPages, onMoveToPage }: ProjectContainerProps) {
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(container.name)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -64,12 +67,32 @@ export default function ProjectContainer({ container, onClose, onRename }: Proje
             </button>
           </div>
         )}
-        <button
-          onClick={() => onClose(container.id)}
-          className="text-gray-600 hover:text-red-400 p-0.5 ml-2 shrink-0"
-        >
-          <X size={14} />
-        </button>
+        <div className="flex items-center gap-0.5 ml-2 shrink-0">
+          {currentPage > 0 && (
+            <button
+              onClick={() => onMoveToPage(container.id, currentPage - 1)}
+              className="text-gray-700 hover:text-gray-400 p-0.5"
+              title="Move to previous page"
+            >
+              <ArrowLeft size={11} />
+            </button>
+          )}
+          {totalPages > 1 && currentPage < totalPages - 1 && (
+            <button
+              onClick={() => onMoveToPage(container.id, currentPage + 1)}
+              className="text-gray-700 hover:text-gray-400 p-0.5"
+              title="Move to next page"
+            >
+              <ArrowRight size={11} />
+            </button>
+          )}
+          <button
+            onClick={() => onClose(container.id)}
+            className="text-gray-600 hover:text-red-400 p-0.5"
+          >
+            <X size={14} />
+          </button>
+        </div>
       </div>
 
       {/* Body: todo list + terminal */}

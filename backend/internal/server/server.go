@@ -26,7 +26,7 @@ func New(devMode bool, mgr *container.Manager, db *store.Store) http.Handler {
 		case http.MethodGet:
 			listContainers(mgr, w)
 		case http.MethodPost:
-			createContainer(mgr, w, r)
+			createContainer(mgr, db, w, r)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -44,6 +44,18 @@ func New(devMode bool, mgr *container.Manager, db *store.Store) http.Handler {
 			deleteContainer(mgr, db, id, w)
 		case http.MethodPatch:
 			renameContainer(mgr, id, w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	// Layout REST API
+	mux.HandleFunc("/api/layout", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			getLayout(db, w)
+		case http.MethodPut:
+			updateLayout(db, w, r)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -114,7 +126,7 @@ type createContainerReq struct {
 	Name string `json:"name"`
 }
 
-func createContainer(mgr *container.Manager, w http.ResponseWriter, r *http.Request) {
+func createContainer(mgr *container.Manager, db *store.Store, w http.ResponseWriter, r *http.Request) {
 	var req createContainerReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -129,6 +141,10 @@ func createContainer(mgr *container.Manager, w http.ResponseWriter, r *http.Requ
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Auto-assign layout position
+	page, pos, _ := db.NextAvailableSlot()
+	_ = db.AddLayoutEntry(c.ID, page, pos)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -146,6 +162,7 @@ func deleteContainer(mgr *container.Manager, db *store.Store, id string, w http.
 		return
 	}
 	_ = db.DeleteTodosByContainer(id)
+	_ = db.RemoveLayoutEntry(id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -252,6 +269,34 @@ func reorderTodos(db *store.Store, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := db.ReorderTodos(req.IDs); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Layout handlers ---
+
+func getLayout(db *store.Store, w http.ResponseWriter) {
+	entries, err := db.GetLayout()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if entries == nil {
+		entries = []store.LayoutEntry{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(entries)
+}
+
+func updateLayout(db *store.Store, w http.ResponseWriter, r *http.Request) {
+	var entries []store.LayoutEntry
+	if err := json.NewDecoder(r.Body).Decode(&entries); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := db.SetLayout(entries); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
