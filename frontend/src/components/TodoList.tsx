@@ -4,6 +4,7 @@ import {
   closestCenter,
   KeyboardSensor,
   PointerSensor,
+  TouchSensor,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -42,6 +43,7 @@ export default function TodoList({ containerID, refreshKey }: TodoListProps) {
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
 
@@ -158,7 +160,7 @@ function SortableTodoItem({ todo, onToggle, onEdit, onDelete }: SortableTodoItem
       className="flex items-center gap-1 px-1.5 py-1 border-b border-gray-800/50 group hover:bg-gray-800/30"
     >
       <button
-        className="text-gray-700 hover:text-gray-500 cursor-grab active:cursor-grabbing p-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+        className="text-gray-700 hover:text-gray-500 cursor-grab active:cursor-grabbing p-0.5 shrink-0"
         {...attributes}
         {...listeners}
       >
