@@ -16,8 +16,10 @@ frontend:
 	rm -rf $(EMBED_DIR)
 	cp -r $(FRONTEND_DIR)/dist $(EMBED_DIR)
 
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+
 backend:
-	cd $(BACKEND_DIR) && CGO_ENABLED=1 go build -o ../$(OUTPUT_DIR)/$(APP_NAME) ./cmd/server/
+	cd $(BACKEND_DIR) && CGO_ENABLED=1 go build -ldflags "-X main.version=$(VERSION)" -o ../$(OUTPUT_DIR)/$(APP_NAME) ./cmd/server/
 
 # Cross-platform builds
 build-linux:
