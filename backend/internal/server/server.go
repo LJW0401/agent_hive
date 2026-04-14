@@ -93,6 +93,18 @@ func New(devMode bool, mgr *container.Manager, db *store.Store, am *auth.Manager
 		}
 	})
 
+	// Mobile Layout REST API
+	mux.HandleFunc("/api/mobile-layout", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			getMobileLayout(db, w)
+		case http.MethodPut:
+			updateMobileLayout(db, w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
 	// Todo REST API: /api/todos/{containerID}[/{todoID}]
 	mux.HandleFunc("/api/todos/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/api/todos/")
@@ -226,6 +238,7 @@ func createContainer(mgr *container.Manager, db *store.Store, w http.ResponseWri
 	_ = db.SaveContainer(c.ID, c.Name)
 	page, pos, _ := db.NextAvailableSlot()
 	_ = db.AddLayoutEntry(c.ID, page, pos)
+	_ = db.AddMobileLayoutEntry(c.ID)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -245,6 +258,7 @@ func deleteContainer(mgr *container.Manager, db *store.Store, id string, w http.
 	_ = db.DeleteContainerMeta(id)
 	_ = db.DeleteTodosByContainer(id)
 	_ = db.RemoveLayoutEntry(id)
+	_ = db.RemoveMobileLayoutEntry(id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -388,6 +402,34 @@ func updateLayout(db *store.Store, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := db.SetLayout(entries); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Mobile Layout handlers ---
+
+func getMobileLayout(db *store.Store, w http.ResponseWriter) {
+	entries, err := db.GetMobileLayout()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if entries == nil {
+		entries = []store.MobileLayoutEntry{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(entries)
+}
+
+func updateMobileLayout(db *store.Store, w http.ResponseWriter, r *http.Request) {
+	var entries []store.MobileLayoutEntry
+	if err := json.NewDecoder(r.Body).Decode(&entries); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := db.SetMobileLayout(entries); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
