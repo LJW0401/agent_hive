@@ -25,6 +25,7 @@ export default function MobileApp() {
   const [mobileLayout, setMobileLayout] = useState<MobileLayoutEntry[]>([])
   const [todoRefresh, setTodoRefresh] = useState<Record<string, number>>({})
   const swiperRef = useRef<SwiperType | null>(null)
+  const pendingSlideIdRef = useRef<string | null>(null)
 
   const connectNotifyWS = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -91,6 +92,17 @@ export default function MobileApp() {
     return sorted
   })()
 
+  // Apply pending slide after data updates (find by container ID)
+  useEffect(() => {
+    if (pendingSlideIdRef.current && swiperRef.current) {
+      const idx = sortedContainers.findIndex((c) => c.id === pendingSlideIdRef.current)
+      if (idx >= 0) {
+        pendingSlideIdRef.current = null
+        setTimeout(() => swiperRef.current?.slideTo(idx, 0), 50)
+      }
+    }
+  }, [sortedContainers])
+
   const handleLogin = useCallback((token: string) => {
     setAuthToken(token)
     setAuthState('ready')
@@ -101,18 +113,13 @@ export default function MobileApp() {
   const handleCreate = useCallback(async () => {
     try {
       const c = await createContainer('New Project')
-      const ml = await getMobileLayout()
-      setContainers((prev) => [...prev, c])
-      setMobileLayout(ml)
-      // Slide to the new project (it's at the end, before the "new" slot)
-      setTimeout(() => {
-        swiperRef.current?.slideTo(ml.length - 1)
-      }, 100)
+      pendingSlideIdRef.current = c.id
+      loadData()
     } catch (e) {
       alert('Failed to create project')
       console.error(e)
     }
-  }, [])
+  }, [loadData])
 
   const handleClose = useCallback(async (id: string) => {
     const currentSlide = swiperRef.current?.activeIndex ?? 0
