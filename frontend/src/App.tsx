@@ -86,6 +86,9 @@ export default function App() {
             [msg.containerId]: (prev[msg.containerId] ?? 0) + 1,
           }))
         }
+        if (msg.type === 'containers-changed') {
+          loadData()
+        }
       } catch { /* ignore */ }
     }
     ws.onclose = () => {

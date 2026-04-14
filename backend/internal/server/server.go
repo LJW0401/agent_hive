@@ -48,6 +48,7 @@ func New(devMode bool, mgr *container.Manager, db *store.Store, am *auth.Manager
 			listContainers(mgr, w)
 		case http.MethodPost:
 			createContainer(mgr, db, w, r)
+			am.Broadcast([]byte(`{"type":"containers-changed"}`))
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -71,8 +72,10 @@ func New(devMode bool, mgr *container.Manager, db *store.Store, am *auth.Manager
 		switch r.Method {
 		case http.MethodDelete:
 			deleteContainer(mgr, db, id, w)
+			am.Broadcast([]byte(`{"type":"containers-changed"}`))
 		case http.MethodPatch:
 			renameContainer(mgr, db, id, w, r)
+			am.Broadcast([]byte(`{"type":"containers-changed"}`))
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
