@@ -8,12 +8,14 @@ interface ProjectContainerProps {
   container: Container
   onClose: (id: string) => void
   onRename: (id: string, name: string) => void
+  onStatusChange: (id: string, connected: boolean) => void
   currentPage: number
   totalPages: number
   onMoveToPage: (containerId: string, page: number) => void
+  dragHandleProps?: Record<string, unknown>
 }
 
-export default function ProjectContainer({ container, onClose, onRename, currentPage, totalPages, onMoveToPage }: ProjectContainerProps) {
+export default function ProjectContainer({ container, onClose, onRename, onStatusChange, currentPage, totalPages, onMoveToPage, dragHandleProps }: ProjectContainerProps) {
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(container.name)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -38,7 +40,7 @@ export default function ProjectContainer({ container, onClose, onRename, current
   return (
     <div className="flex flex-col h-full rounded-lg border border-gray-800 bg-[#111114] overflow-hidden">
       {/* Header */}
-      <div className="flex items-center h-9 px-3 shrink-0 border-b border-gray-800 bg-[#0c0c0e]">
+      <div className="flex items-center h-9 px-3 shrink-0 border-b border-gray-800 bg-[#0c0c0e] cursor-grab active:cursor-grabbing" data-drag-handle {...dragHandleProps}>
         {editing ? (
           <form
             className="flex items-center gap-1 flex-1 min-w-0"
@@ -58,6 +60,7 @@ export default function ProjectContainer({ container, onClose, onRename, current
           </form>
         ) : (
           <div className="flex items-center gap-1.5 flex-1 min-w-0">
+            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${container.connected ? 'bg-emerald-500' : 'bg-gray-600'}`} />
             <span className="text-xs text-gray-300 truncate">{container.name}</span>
             <button
               onClick={() => setEditing(true)}
@@ -103,7 +106,11 @@ export default function ProjectContainer({ container, onClose, onRename, current
         </div>
         {/* Right: Terminal */}
         <div className="flex-1 min-w-0 min-h-0">
-          <Terminal containerId={container.id} />
+          <Terminal
+            containerId={container.id}
+            connected={container.connected}
+            onReconnected={() => onStatusChange(container.id, true)}
+          />
         </div>
       </div>
     </div>

@@ -1,6 +1,7 @@
 export interface Container {
   id: string
   name: string
+  connected: boolean
   createdAt: string
 }
 
@@ -29,6 +30,10 @@ export async function renameContainer(id: string, name: string): Promise<void> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
   })
+}
+
+export async function reopenContainer(id: string): Promise<void> {
+  await fetch(`/api/containers/${id}/reopen`, { method: 'POST' })
 }
 
 // --- Layout API ---

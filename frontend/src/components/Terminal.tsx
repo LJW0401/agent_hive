@@ -1,10 +1,14 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { RotateCw } from 'lucide-react'
+import { reopenContainer } from '../api'
 import '@xterm/xterm/css/xterm.css'
 
 interface TerminalProps {
   containerId: string
+  connected: boolean
+  onReconnected: () => void
 }
 
 const THEME = {
@@ -30,11 +34,15 @@ const THEME = {
   brightWhite: '#f9fafb',
 }
 
-export default function Terminal({ containerId }: TerminalProps) {
+export default function Terminal({ containerId, connected, onReconnected }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerm | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
+  const [disconnected, setDisconnected] = useState(!connected)
+  const [reopening, setReopening] = useState(false)
+  // Use a key to force full remount of the terminal when reopening
+  const [mountKey, setMountKey] = useState(0)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -53,6 +61,7 @@ export default function Terminal({ containerId }: TerminalProps) {
     termRef.current = term
     fitAddonRef.current = fitAddon
 
+    // Connect WebSocket
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const wsUrl = `${protocol}//${window.location.host}/ws/terminal?id=${containerId}`
     const ws = new WebSocket(wsUrl)
@@ -64,42 +73,82 @@ export default function Terminal({ containerId }: TerminalProps) {
     }
 
     ws.onmessage = (event) => {
-      const data = event.data instanceof ArrayBuffer
-        ? new Uint8Array(event.data)
-        : event.data
-      term.write(data)
+      if (typeof event.data === 'string') {
+        try {
+          const msg = JSON.parse(event.data)
+          if (msg.type === 'status' && msg.connected === false) {
+            setDisconnected(true)
+            return
+          }
+        } catch { /* not JSON */ }
+        term.write(event.data)
+      } else {
+        term.write(new Uint8Array(event.data))
+      }
     }
 
-    ws.onclose = () => {
-      term.write('\r\n\x1b[31m[Connection closed]\x1b[0m\r\n')
-    }
+    ws.onclose = () => {}
+    ws.onerror = () => {}
 
-    ws.onerror = () => {
-      term.write('\r\n\x1b[31m[Connection error]\x1b[0m\r\n')
-    }
-
-    term.onData((data) => {
+    // Keyboard input → WebSocket
+    const onDataDisposable = term.onData((data) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(new TextEncoder().encode(data))
       }
     })
 
+    // Resize handling
     const handleResize = () => {
       fitAddon.fit()
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }))
       }
     }
-
     const resizeObserver = new ResizeObserver(handleResize)
     resizeObserver.observe(containerRef.current)
 
     return () => {
       resizeObserver.disconnect()
+      onDataDisposable.dispose()
       ws.close()
       term.dispose()
+      termRef.current = null
+      wsRef.current = null
+      fitAddonRef.current = null
     }
-  }, [containerId])
+  }, [containerId, mountKey])
 
-  return <div ref={containerRef} className="w-full h-full" />
+  const handleReopen = async () => {
+    setReopening(true)
+    try {
+      await reopenContainer(containerId)
+      setDisconnected(false)
+      onReconnected()
+      // Force full terminal remount
+      setMountKey((k) => k + 1)
+    } catch (e) {
+      console.error('reopen failed:', e)
+    } finally {
+      setReopening(false)
+    }
+  }
+
+  return (
+    <div className="w-full h-full flex flex-col">
+      <div ref={containerRef} className="flex-1 min-h-0" key={mountKey} />
+      {disconnected && (
+        <div className="flex items-center justify-center gap-2 py-2 bg-[#0c0c0e] border-t border-gray-800">
+          <span className="text-[10px] text-gray-500">Terminal disconnected</span>
+          <button
+            onClick={handleReopen}
+            disabled={reopening}
+            className="flex items-center gap-1 px-2 py-0.5 text-[10px] text-gray-400 hover:text-gray-200 bg-gray-800 hover:bg-gray-700 rounded transition-colors disabled:opacity-50"
+          >
+            <RotateCw size={10} className={reopening ? 'animate-spin' : ''} />
+            {reopening ? 'Opening...' : 'Reopen'}
+          </button>
+        </div>
+      )}
+    </div>
+  )
 }

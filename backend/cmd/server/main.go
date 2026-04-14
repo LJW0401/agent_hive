@@ -23,7 +23,19 @@ func main() {
 	}
 	defer db.Close()
 
-	mgr := container.NewManager()
+	mgr := container.NewManager(*dataDir)
+
+	// Restore containers from database (all start as disconnected)
+	metas, err := db.ListContainerMeta()
+	if err != nil {
+		log.Printf("warning: failed to load containers: %v", err)
+	} else {
+		for _, m := range metas {
+			mgr.Restore(m.ID, m.Name, m.CreatedAt)
+			log.Printf("restored container %s (%s) [disconnected]", m.ID, m.Name)
+		}
+	}
+
 	srv := server.New(*dev, mgr, db)
 
 	addr := fmt.Sprintf(":%d", *port)

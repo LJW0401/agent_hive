@@ -3,12 +3,12 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   DndContext,
   closestCenter,
-  PointerSensor,
   useSensor,
   useSensors,
   type DragEndEvent,
   DragOverlay,
   type DragStartEvent,
+  PointerSensor as LibPointerSensor,
 } from '@dnd-kit/core'
 import {
   SortableContext,
@@ -31,6 +31,23 @@ import {
 } from './api'
 
 const PAGE_SIZE = 4
+
+// Custom PointerSensor that only activates when the event originates from a [data-drag-handle] element
+class DragHandlePointerSensor extends LibPointerSensor {
+  static activators = [
+    {
+      eventName: 'onPointerDown' as const,
+      handler: ({ nativeEvent }: { nativeEvent: PointerEvent }) => {
+        let el = nativeEvent.target as Element | null
+        while (el) {
+          if (el.hasAttribute('data-drag-handle')) return true
+          el = el.parentElement
+        }
+        return false
+      },
+    },
+  ]
+}
 
 // Compact layout: repack all containers sequentially, filling each page before the next.
 function compactLayout(entries: LayoutEntry[]): LayoutEntry[] {
@@ -97,7 +114,7 @@ export default function App() {
   )
 
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(DragHandlePointerSensor, { activationConstraint: { distance: 8 } }),
   )
 
   const handleCreate = useCallback(async () => {
@@ -124,6 +141,12 @@ export default function App() {
     await renameContainer(id, name)
     setContainers((prev) =>
       prev.map((c) => (c.id === id ? { ...c, name } : c)),
+    )
+  }, [])
+
+  const handleStatusChange = useCallback((id: string, connected: boolean) => {
+    setContainers((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, connected } : c)),
     )
   }, [])
 
@@ -250,14 +273,18 @@ export default function App() {
                   {pageSlots.map((container, idx) =>
                     container ? (
                       <SortableGridItem key={container.id} id={container.id}>
-                        <ProjectContainer
-                          container={container}
-                          onClose={handleClose}
-                          onRename={handleRename}
-                          currentPage={currentPage}
-                          totalPages={totalPages}
-                          onMoveToPage={moveToPage}
-                        />
+                        {(dragHandleProps) => (
+                          <ProjectContainer
+                            container={container}
+                            onClose={handleClose}
+                            onRename={handleRename}
+                            onStatusChange={handleStatusChange}
+                            currentPage={currentPage}
+                            totalPages={totalPages}
+                            onMoveToPage={moveToPage}
+                            dragHandleProps={dragHandleProps}
+                          />
+                        )}
                       </SortableGridItem>
                     ) : (
                       <NewProjectSlot key={`empty-${idx}`} onClick={handleCreate} />
@@ -288,7 +315,7 @@ function SortableGridItem({
   children,
 }: {
   id: string
-  children: React.ReactNode
+  children: (dragHandleProps: Record<string, unknown>) => React.ReactNode
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id })
@@ -300,8 +327,8 @@ function SortableGridItem({
   }
 
   return (
-    <div ref={setNodeRef} style={{ ...style, width: '100%', height: '100%' }} {...attributes} {...listeners}>
-      {children}
+    <div ref={setNodeRef} style={{ ...style, width: '100%', height: '100%' }}>
+      {children({ ...attributes, ...listeners })}
     </div>
   )
 }

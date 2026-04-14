@@ -2,9 +2,9 @@ package ws
 
 import (
 	"encoding/json"
-	"io"
 	"log"
 	"net/http"
+	"sync"
 
 	"github.com/gorilla/websocket"
 	"github.com/penguin/agent-hive/internal/container"
@@ -14,7 +14,6 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-// resizeMsg is sent from the client to resize the terminal.
 type resizeMsg struct {
 	Type string `json:"type"`
 	Rows uint16 `json:"rows"`
@@ -41,28 +40,46 @@ func HandleTerminal(mgr *container.Manager) http.HandlerFunc {
 			log.Printf("websocket upgrade error: %v", err)
 			return
 		}
-		defer conn.Close()
 
-		session := c.Session()
+		var wsMu sync.Mutex
+		writeMsg := func(msgType int, data []byte) error {
+			wsMu.Lock()
+			defer wsMu.Unlock()
+			return conn.WriteMessage(msgType, data)
+		}
 
-		// PTY -> WebSocket
-		go func() {
-			buf := make([]byte, 4096)
-			for {
-				n, err := session.Read(buf)
-				if err != nil {
-					if err != io.EOF {
-						log.Printf("pty read error: %v", err)
-					}
-					conn.WriteMessage(websocket.CloseMessage,
-						websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-					return
-				}
-				if err := conn.WriteMessage(websocket.BinaryMessage, buf[:n]); err != nil {
+		// Send terminal history first
+		history, err := mgr.ReadHistory(containerID)
+		if err == nil && len(history) > 0 {
+			writeMsg(websocket.BinaryMessage, history)
+		}
+
+		// If disconnected, send status and close
+		if !c.Connected {
+			writeMsg(websocket.TextMessage, []byte(`{"type":"status","connected":false}`))
+			conn.Close()
+			return
+		}
+
+		// Set up output callback: PTY output -> WebSocket
+		done := make(chan struct{})
+		c.SetCallbacks(
+			func(data []byte) {
+				if err := writeMsg(websocket.BinaryMessage, data); err != nil {
 					log.Printf("ws write error: %v", err)
-					return
 				}
-			}
+			},
+			func() {
+				// Terminal process exited
+				writeMsg(websocket.TextMessage, []byte(`{"type":"status","connected":false}`))
+				conn.Close()
+				close(done)
+			},
+		)
+
+		defer func() {
+			c.ClearCallbacks()
+			conn.Close()
 		}()
 
 		// WebSocket -> PTY
@@ -78,14 +95,14 @@ func HandleTerminal(mgr *container.Manager) http.HandlerFunc {
 			if msgType == websocket.TextMessage {
 				var resize resizeMsg
 				if err := json.Unmarshal(msg, &resize); err == nil && resize.Type == "resize" {
-					if err := session.Resize(resize.Rows, resize.Cols); err != nil {
+					if err := c.ResizePTY(resize.Rows, resize.Cols); err != nil {
 						log.Printf("pty resize error: %v", err)
 					}
 					continue
 				}
 			}
 
-			if _, err := session.Write(msg); err != nil {
+			if _, err := c.WriteToPTY(msg); err != nil {
 				log.Printf("pty write error: %v", err)
 				return
 			}

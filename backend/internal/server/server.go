@@ -33,17 +33,25 @@ func New(devMode bool, mgr *container.Manager, db *store.Store) http.Handler {
 	})
 
 	mux.HandleFunc("/api/containers/", func(w http.ResponseWriter, r *http.Request) {
-		id := r.URL.Path[len("/api/containers/"):]
-		if id == "" {
+		path := r.URL.Path[len("/api/containers/"):]
+		if path == "" {
 			http.Error(w, "missing container id", http.StatusBadRequest)
 			return
 		}
 
+		// /api/containers/{id}/reopen
+		if strings.HasSuffix(path, "/reopen") && r.Method == http.MethodPost {
+			id := strings.TrimSuffix(path, "/reopen")
+			reopenContainer(mgr, id, w)
+			return
+		}
+
+		id := path
 		switch r.Method {
 		case http.MethodDelete:
 			deleteContainer(mgr, db, id, w)
 		case http.MethodPatch:
-			renameContainer(mgr, id, w, r)
+			renameContainer(mgr, db, id, w, r)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -142,7 +150,8 @@ func createContainer(mgr *container.Manager, db *store.Store, w http.ResponseWri
 		return
 	}
 
-	// Auto-assign layout position
+	// Persist metadata and layout
+	_ = db.SaveContainer(c.ID, c.Name)
 	page, pos, _ := db.NextAvailableSlot()
 	_ = db.AddLayoutEntry(c.ID, page, pos)
 
@@ -161,6 +170,7 @@ func deleteContainer(mgr *container.Manager, db *store.Store, id string, w http.
 		http.Error(w, "container not found", http.StatusNotFound)
 		return
 	}
+	_ = db.DeleteContainerMeta(id)
 	_ = db.DeleteTodosByContainer(id)
 	_ = db.RemoveLayoutEntry(id)
 	w.WriteHeader(http.StatusNoContent)
@@ -170,7 +180,7 @@ type renameReq struct {
 	Name string `json:"name"`
 }
 
-func renameContainer(mgr *container.Manager, id string, w http.ResponseWriter, r *http.Request) {
+func renameContainer(mgr *container.Manager, db *store.Store, id string, w http.ResponseWriter, r *http.Request) {
 	var req renameReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -178,6 +188,15 @@ func renameContainer(mgr *container.Manager, id string, w http.ResponseWriter, r
 	}
 	if !mgr.Rename(id, req.Name) {
 		http.Error(w, "container not found", http.StatusNotFound)
+		return
+	}
+	_ = db.RenameContainer(id, req.Name)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func reopenContainer(mgr *container.Manager, id string, w http.ResponseWriter) {
+	if err := mgr.Reopen(id); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

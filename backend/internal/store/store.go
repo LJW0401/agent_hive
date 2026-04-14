@@ -50,6 +50,12 @@ func migrate(db *sql.DB) error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_todos_container ON todos(container);
 
+		CREATE TABLE IF NOT EXISTS containers (
+			id         TEXT PRIMARY KEY,
+			name       TEXT NOT NULL DEFAULT 'New Project',
+			created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+		);
+
 		CREATE TABLE IF NOT EXISTS layouts (
 			container_id TEXT PRIMARY KEY,
 			page         INTEGER NOT NULL DEFAULT 0,
