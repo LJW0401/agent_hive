@@ -208,7 +208,7 @@ export default function MobileApp() {
             />
           </SwiperSlide>
         ))}
-        <SwiperSlide className="!flex flex-col h-full items-center justify-center">
+        <SwiperSlide className="!flex flex-col h-full p-4">
           <NewProjectSlot onClick={handleCreate} />
         </SwiperSlide>
       </Swiper>
