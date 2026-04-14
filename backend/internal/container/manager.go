@@ -12,6 +12,12 @@ import (
 	ptypkg "github.com/penguin/agent-hive/internal/pty"
 )
 
+// Listener receives PTY output and disconnect events.
+type Listener struct {
+	OnOutput     func([]byte)
+	OnDisconnect func()
+}
+
 // Container represents a project container with an optional PTY session.
 type Container struct {
 	ID        string    `json:"id"`
@@ -19,11 +25,10 @@ type Container struct {
 	Connected bool      `json:"connected"`
 	CreatedAt time.Time `json:"createdAt"`
 
-	mu           sync.Mutex
-	session      *ptypkg.Session
-	logFile      *os.File
-	onOutput     func([]byte)
-	onDisconnect func()
+	mu        sync.Mutex
+	session   *ptypkg.Session
+	logFile   *os.File
+	listeners map[*Listener]bool
 }
 
 // Session returns the PTY session (nil if disconnected).
@@ -31,6 +36,23 @@ func (c *Container) Session() *ptypkg.Session {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.session
+}
+
+// AddListener registers a listener for PTY output. Returns the listener for later removal.
+func (c *Container) AddListener(l *Listener) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.listeners == nil {
+		c.listeners = make(map[*Listener]bool)
+	}
+	c.listeners[l] = true
+}
+
+// RemoveListener unregisters a listener.
+func (c *Container) RemoveListener(l *Listener) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.listeners, l)
 }
 
 // Manager manages multiple containers.
@@ -77,6 +99,7 @@ func (m *Manager) Create(name string) (*Container, error) {
 		CreatedAt: time.Now(),
 		session:   session,
 		logFile:   logFile,
+		listeners: make(map[*Listener]bool),
 	}
 
 	m.mu.Lock()
@@ -95,14 +118,13 @@ func (m *Manager) Restore(id, name string, createdAt time.Time) {
 		Name:      name,
 		Connected: false,
 		CreatedAt: createdAt,
+		listeners: make(map[*Listener]bool),
 	}
 
 	m.mu.Lock()
 	m.containers[id] = c
 	m.mu.Unlock()
 
-	// Update nextID to avoid collisions
-	// Parse numeric part from "c-123"
 	var num int64
 	fmt.Sscanf(id, "c-%d", &num)
 	for {
@@ -137,7 +159,6 @@ func (m *Manager) Reopen(id string) error {
 		return err
 	}
 
-	// Truncate old log and start fresh
 	logFile, err := os.OpenFile(m.terminalLogPath(id), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		session.Close()
@@ -155,8 +176,7 @@ func (m *Manager) Reopen(id string) error {
 	return nil
 }
 
-// pumpOutput reads from PTY and writes to the log file.
-// When the PTY exits, the container is marked as disconnected.
+// pumpOutput reads from PTY and broadcasts to all listeners + log file.
 func (m *Manager) pumpOutput(c *Container) {
 	buf := make([]byte, 4096)
 	for {
@@ -169,16 +189,18 @@ func (m *Manager) pumpOutput(c *Container) {
 
 		n, err := s.Read(buf)
 		if n > 0 {
+			data := make([]byte, n)
+			copy(data, buf[:n])
+
 			c.mu.Lock()
 			if c.logFile != nil {
-				c.logFile.Write(buf[:n])
+				c.logFile.Write(data)
 			}
-			c.mu.Unlock()
-
-			// Notify attached WebSocket readers via the broadcast mechanism
-			c.mu.Lock()
-			if c.onOutput != nil {
-				c.onOutput(buf[:n])
+			// Broadcast to all listeners
+			for l := range c.listeners {
+				if l.OnOutput != nil {
+					l.OnOutput(data)
+				}
 			}
 			c.mu.Unlock()
 		}
@@ -187,7 +209,7 @@ func (m *Manager) pumpOutput(c *Container) {
 		}
 	}
 
-	// Process exited — mark disconnected
+	// Process exited — mark disconnected, notify all listeners
 	c.mu.Lock()
 	if c.session != nil {
 		c.session.Close()
@@ -198,8 +220,10 @@ func (m *Manager) pumpOutput(c *Container) {
 		c.logFile = nil
 	}
 	c.Connected = false
-	if c.onDisconnect != nil {
-		c.onDisconnect()
+	for l := range c.listeners {
+		if l.OnDisconnect != nil {
+			l.OnDisconnect()
+		}
 	}
 	c.mu.Unlock()
 }
@@ -234,9 +258,7 @@ func (m *Manager) Delete(id string) bool {
 	}
 	c.mu.Unlock()
 
-	// Remove log file
 	os.Remove(m.terminalLogPath(id))
-
 	return true
 }
 
@@ -266,22 +288,6 @@ func (m *Manager) Rename(id, name string) bool {
 // ReadHistory reads the terminal output log for a container.
 func (m *Manager) ReadHistory(id string) ([]byte, error) {
 	return os.ReadFile(m.terminalLogPath(id))
-}
-
-// SetCallbacks sets the output and disconnect callbacks for a container.
-func (c *Container) SetCallbacks(onOutput func([]byte), onDisconnect func()) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.onOutput = onOutput
-	c.onDisconnect = onDisconnect
-}
-
-// ClearCallbacks clears the callbacks.
-func (c *Container) ClearCallbacks() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.onOutput = nil
-	c.onDisconnect = nil
 }
 
 // WriteToPTY writes data to the PTY session.

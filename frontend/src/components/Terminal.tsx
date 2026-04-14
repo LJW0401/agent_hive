@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { RotateCw } from 'lucide-react'
-import { reopenContainer } from '../api'
+import { reopenContainer, getAuthToken } from '../api'
 import '@xterm/xterm/css/xterm.css'
 
 interface TerminalProps {
   containerId: string
   connected: boolean
   onReconnected: () => void
+  onReadOnly?: () => void
 }
 
 const THEME = {
@@ -34,7 +35,7 @@ const THEME = {
   brightWhite: '#f9fafb',
 }
 
-export default function Terminal({ containerId, connected, onReconnected }: TerminalProps) {
+export default function Terminal({ containerId, connected, onReconnected, onReadOnly }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerm | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -63,7 +64,8 @@ export default function Terminal({ containerId, connected, onReconnected }: Term
 
     // Connect WebSocket
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.host}/ws/terminal?id=${containerId}`
+    const tokenParam = getAuthToken() ? `&token=${getAuthToken()}` : ''
+    const wsUrl = `${protocol}//${window.location.host}/ws/terminal?id=${containerId}${tokenParam}`
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
     ws.binaryType = 'arraybuffer'
@@ -78,6 +80,16 @@ export default function Terminal({ containerId, connected, onReconnected }: Term
           const msg = JSON.parse(event.data)
           if (msg.type === 'status' && msg.connected === false) {
             setDisconnected(true)
+            return
+          }
+          if (msg.type === 'preempted') {
+            term.write('\r\n\x1b[33m[Session preempted - read only]\x1b[0m\r\n')
+            onReadOnly?.()
+            return
+          }
+          if (msg.type === 'readonly') {
+            term.write('\x1b[33m[Read-only mode]\x1b[0m\r\n')
+            onReadOnly?.()
             return
           }
         } catch { /* not JSON */ }

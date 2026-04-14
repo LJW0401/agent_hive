@@ -9,13 +9,14 @@ interface ProjectContainerProps {
   onClose: (id: string) => void
   onRename: (id: string, name: string) => void
   onStatusChange: (id: string, connected: boolean) => void
+  onReadOnly?: () => void
   currentPage: number
   totalPages: number
   onMoveToPage: (containerId: string, page: number) => void
   dragHandleProps?: Record<string, unknown>
 }
 
-export default function ProjectContainer({ container, onClose, onRename, onStatusChange, currentPage, totalPages, onMoveToPage, dragHandleProps }: ProjectContainerProps) {
+export default function ProjectContainer({ container, onClose, onRename, onStatusChange, onReadOnly, currentPage, totalPages, onMoveToPage, dragHandleProps }: ProjectContainerProps) {
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(container.name)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -110,6 +111,7 @@ export default function ProjectContainer({ container, onClose, onRename, onStatu
             containerId={container.id}
             connected={container.connected}
             onReconnected={() => onStatusChange(container.id, true)}
+            onReadOnly={onReadOnly}
           />
         </div>
       </div>

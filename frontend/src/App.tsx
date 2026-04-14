@@ -19,6 +19,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import ProjectContainer from './components/ProjectContainer'
 import NewProjectSlot from './components/NewProjectSlot'
+import LoginPage from './components/LoginPage'
 import {
   listContainers,
   createContainer,
@@ -26,6 +27,10 @@ import {
   renameContainer,
   getLayout,
   updateLayout,
+  checkAuth,
+  claimSession,
+  setAuthToken,
+  getAuthToken,
   type Container,
   type LayoutEntry,
 } from './api'
@@ -61,18 +66,61 @@ function compactLayout(entries: LayoutEntry[]): LayoutEntry[] {
 }
 
 export default function App() {
+  const [authState, setAuthState] = useState<'loading' | 'login' | 'ready'>('loading')
+  const [readOnly, setReadOnly] = useState(false)
   const [containers, setContainers] = useState<Container[]>([])
   const [layout, setLayout] = useState<LayoutEntry[]>([])
   const [currentPage, setCurrentPage] = useState(0)
   const [activeId, setActiveId] = useState<string | null>(null)
   const [direction, setDirection] = useState(0)
 
-  useEffect(() => {
+  const connectNotifyWS = useCallback(() => {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const tokenParam = getAuthToken() ? `?token=${getAuthToken()}` : ''
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/notify${tokenParam}`)
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data)
+        if (msg.type === 'preempted') {
+          setReadOnly(true)
+        }
+      } catch { /* ignore */ }
+    }
+    ws.onclose = () => {
+      // Reconnect after 3s
+      setTimeout(connectNotifyWS, 3000)
+    }
+    return ws
+  }, [])
+
+  const loadData = useCallback(() => {
     Promise.all([listContainers(), getLayout()]).then(([cs, lo]) => {
       setContainers(cs)
       setLayout(lo)
     })
   }, [])
+
+  useEffect(() => {
+    checkAuth().then(async (auth) => {
+      if (!auth.enabled) {
+        // No auth configured — go straight in
+        setAuthState('ready')
+        loadData()
+        return
+      }
+      if (!auth.valid) {
+        // No valid token — show login
+        setAuthState('login')
+        return
+      }
+      // Valid token exists — claim active control (preempt others)
+      await claimSession()
+      setReadOnly(false)
+      setAuthState('ready')
+      loadData()
+      connectNotifyWS()
+    })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Total pages: ceil(containers / PAGE_SIZE), plus 1 extra if exactly full. Min 1.
   const totalPages = useMemo(() => {
@@ -210,8 +258,28 @@ export default function App() {
     ? containers.find((c) => c.id === activeId) ?? null
     : null
 
+  const handleLogin = useCallback((token: string) => {
+    setAuthToken(token)
+    setAuthState('ready')
+    loadData()
+    connectNotifyWS()
+  }, [loadData, connectNotifyWS])
+
+  if (authState === 'loading') {
+    return <div className="flex items-center justify-center h-screen bg-[#0a0a0b] text-gray-500 text-sm">Loading...</div>
+  }
+
+  if (authState === 'login') {
+    return <LoginPage onLogin={handleLogin} />
+  }
+
   return (
     <div className="flex flex-col h-screen bg-[#0a0a0b]">
+      {readOnly && (
+        <div className="bg-yellow-900/30 border-b border-yellow-800 px-4 py-1 text-center text-[11px] text-yellow-400">
+          Read-only mode — another device has control
+        </div>
+      )}
       <header className="flex items-center px-4 h-11 border-b border-gray-800 shrink-0">
         <h1 className="text-sm font-semibold text-gray-200 tracking-wide">
           Agent Hive
@@ -279,6 +347,7 @@ export default function App() {
                             onClose={handleClose}
                             onRename={handleRename}
                             onStatusChange={handleStatusChange}
+                            onReadOnly={() => setReadOnly(true)}
                             currentPage={currentPage}
                             totalPages={totalPages}
                             onMoveToPage={moveToPage}

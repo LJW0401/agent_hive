@@ -1,3 +1,46 @@
+// Auth token persisted in localStorage
+const TOKEN_KEY = 'agent_hive_token'
+let authToken = localStorage.getItem(TOKEN_KEY) ?? ''
+
+export function setAuthToken(token: string) {
+  authToken = token
+  localStorage.setItem(TOKEN_KEY, token)
+}
+
+export function getAuthToken(): string {
+  return authToken
+}
+
+function authHeaders(): Record<string, string> {
+  const h: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (authToken) h['X-Auth-Token'] = authToken
+  return h
+}
+
+function authQuery(): string {
+  return authToken ? `token=${authToken}` : ''
+}
+
+// --- Auth API ---
+
+export interface AuthCheck {
+  enabled: boolean
+  valid: boolean
+  readOnly: boolean
+}
+
+export async function checkAuth(): Promise<AuthCheck> {
+  const res = await fetch(`/api/auth/check?${authQuery()}`)
+  return res.json()
+}
+
+export async function claimSession(): Promise<boolean> {
+  const res = await fetch(`/api/auth/claim?${authQuery()}`, { method: 'POST' })
+  return res.ok
+}
+
+// --- Container API ---
+
 export interface Container {
   id: string
   name: string
@@ -6,7 +49,7 @@ export interface Container {
 }
 
 export async function listContainers(): Promise<Container[]> {
-  const res = await fetch('/api/containers')
+  const res = await fetch('/api/containers', { headers: authHeaders() })
   const data = await res.json()
   return data ?? []
 }
@@ -14,26 +57,26 @@ export async function listContainers(): Promise<Container[]> {
 export async function createContainer(name: string): Promise<Container> {
   const res = await fetch('/api/containers', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify({ name }),
   })
   return res.json()
 }
 
 export async function deleteContainer(id: string): Promise<void> {
-  await fetch(`/api/containers/${id}`, { method: 'DELETE' })
+  await fetch(`/api/containers/${id}`, { method: 'DELETE', headers: authHeaders() })
 }
 
 export async function renameContainer(id: string, name: string): Promise<void> {
   await fetch(`/api/containers/${id}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify({ name }),
   })
 }
 
 export async function reopenContainer(id: string): Promise<void> {
-  await fetch(`/api/containers/${id}/reopen`, { method: 'POST' })
+  await fetch(`/api/containers/${id}/reopen`, { method: 'POST', headers: authHeaders() })
 }
 
 // --- Layout API ---
@@ -45,14 +88,14 @@ export interface LayoutEntry {
 }
 
 export async function getLayout(): Promise<LayoutEntry[]> {
-  const res = await fetch('/api/layout')
+  const res = await fetch('/api/layout', { headers: authHeaders() })
   return res.json()
 }
 
 export async function updateLayout(entries: LayoutEntry[]): Promise<void> {
   await fetch('/api/layout', {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify(entries),
   })
 }
@@ -69,14 +112,14 @@ export interface Todo {
 }
 
 export async function listTodos(containerID: string): Promise<Todo[]> {
-  const res = await fetch(`/api/todos/${containerID}`)
+  const res = await fetch(`/api/todos/${containerID}`, { headers: authHeaders() })
   return res.json()
 }
 
 export async function createTodo(containerID: string, content: string): Promise<Todo> {
   const res = await fetch(`/api/todos/${containerID}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify({ content }),
   })
   return res.json()
@@ -85,19 +128,19 @@ export async function createTodo(containerID: string, content: string): Promise<
 export async function updateTodo(containerID: string, todoID: number, content: string, done: boolean): Promise<void> {
   await fetch(`/api/todos/${containerID}/${todoID}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify({ content, done }),
   })
 }
 
 export async function deleteTodo(containerID: string, todoID: number): Promise<void> {
-  await fetch(`/api/todos/${containerID}/${todoID}`, { method: 'DELETE' })
+  await fetch(`/api/todos/${containerID}/${todoID}`, { method: 'DELETE', headers: authHeaders() })
 }
 
 export async function reorderTodos(containerID: string, ids: number[]): Promise<void> {
   await fetch(`/api/todos/${containerID}/reorder`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify({ ids }),
   })
 }

@@ -6,26 +6,32 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/penguin/agent-hive/internal/auth"
+	"github.com/penguin/agent-hive/internal/config"
 	"github.com/penguin/agent-hive/internal/container"
 	"github.com/penguin/agent-hive/internal/server"
 	"github.com/penguin/agent-hive/internal/store"
 )
 
 func main() {
-	port := flag.Int("port", 8090, "server port")
+	configPath := flag.String("config", "config.yaml", "config file path")
 	dev := flag.Bool("dev", false, "enable dev mode (proxy to Vite dev server)")
-	dataDir := flag.String("data", "./data", "data directory")
 	flag.Parse()
 
-	db, err := store.New(*dataDir)
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		log.Fatalf("failed to load config: %v", err)
+	}
+
+	db, err := store.New(cfg.DataDir)
 	if err != nil {
 		log.Fatalf("failed to open database: %v", err)
 	}
 	defer db.Close()
 
-	mgr := container.NewManager(*dataDir)
+	mgr := container.NewManager(cfg.DataDir)
 
-	// Restore containers from database (all start as disconnected)
+	// Restore containers from database
 	metas, err := db.ListContainerMeta()
 	if err != nil {
 		log.Printf("warning: failed to load containers: %v", err)
@@ -36,9 +42,16 @@ func main() {
 		}
 	}
 
-	srv := server.New(*dev, mgr, db)
+	am := auth.NewManager(cfg.Token, cfg.Machines)
+	if am.Enabled() {
+		log.Printf("authentication enabled")
+	} else {
+		log.Printf("authentication disabled (no token in config)")
+	}
 
-	addr := fmt.Sprintf(":%d", *port)
+	srv := server.New(*dev, mgr, db, am)
+
+	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Agent Hive listening on http://localhost%s", addr)
 	if err := http.ListenAndServe(addr, srv); err != nil {
 		log.Fatal(err)

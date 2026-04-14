@@ -1,0 +1,9 @@
+# Agent Hive Configuration
+port: 8090
+data_dir: ./data
+
+# Authentication (leave empty to disable)
+token: ""
+
+# Machine whitelist (leave empty to allow all)
+machines: []
