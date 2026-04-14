@@ -10,13 +10,15 @@ interface ProjectContainerProps {
   onRename: (id: string, name: string) => void
   onStatusChange: (id: string, connected: boolean) => void
   onReadOnly?: () => void
+  readOnly?: boolean
+  todoRefreshKey?: number
   currentPage: number
   totalPages: number
   onMoveToPage: (containerId: string, page: number) => void
   dragHandleProps?: Record<string, unknown>
 }
 
-export default function ProjectContainer({ container, onClose, onRename, onStatusChange, onReadOnly, currentPage, totalPages, onMoveToPage, dragHandleProps }: ProjectContainerProps) {
+export default function ProjectContainer({ container, onClose, onRename, onStatusChange, onReadOnly, readOnly, todoRefreshKey, currentPage, totalPages, onMoveToPage, dragHandleProps }: ProjectContainerProps) {
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(container.name)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -103,13 +105,14 @@ export default function ProjectContainer({ container, onClose, onRename, onStatu
       <div className="flex flex-1 min-h-0">
         {/* Left: Todo area */}
         <div className="w-48 shrink-0 border-r border-gray-800 hidden lg:flex flex-col">
-          <TodoList containerID={container.id} />
+          <TodoList containerID={container.id} readOnly={readOnly} refreshKey={todoRefreshKey} />
         </div>
         {/* Right: Terminal */}
         <div className="flex-1 min-w-0 min-h-0">
           <Terminal
             containerId={container.id}
             connected={container.connected}
+            readOnly={readOnly}
             onReconnected={() => onStatusChange(container.id, true)}
             onReadOnly={onReadOnly}
           />

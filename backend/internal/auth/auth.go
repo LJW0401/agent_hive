@@ -137,6 +137,20 @@ func (m *Manager) UnregisterNotifyWS(conn *websocket.Conn) {
 	m.notifyMu.Unlock()
 }
 
+// Broadcast sends a message to all registered notify WebSockets (without closing them).
+func (m *Manager) Broadcast(message []byte) {
+	m.notifyMu.Lock()
+	conns := make([]*websocket.Conn, 0, len(m.notifyWS))
+	for c := range m.notifyWS {
+		conns = append(conns, c)
+	}
+	m.notifyMu.Unlock()
+
+	for _, c := range conns {
+		c.WriteMessage(websocket.TextMessage, message)
+	}
+}
+
 // notifyAllPreempted sends preemption message to all registered WebSockets and clears them.
 func (m *Manager) notifyAllPreempted() {
 	m.notifyMu.Lock()

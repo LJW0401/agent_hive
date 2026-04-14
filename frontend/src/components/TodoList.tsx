@@ -28,16 +28,18 @@ import {
 
 interface TodoListProps {
   containerID: string
+  readOnly?: boolean
+  refreshKey?: number
 }
 
-export default function TodoList({ containerID }: TodoListProps) {
+export default function TodoList({ containerID, readOnly, refreshKey }: TodoListProps) {
   const [todos, setTodos] = useState<Todo[]>([])
   const [newContent, setNewContent] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     listTodos(containerID).then(setTodos)
-  }, [containerID])
+  }, [containerID, refreshKey])
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -83,33 +85,36 @@ export default function TodoList({ containerID }: TodoListProps) {
   return (
     <div className="flex flex-col h-full text-xs">
       {/* Add todo input */}
-      <form
-        className="flex items-center gap-1 p-1.5 border-b border-gray-800"
-        onSubmit={(e) => { e.preventDefault(); handleAdd() }}
-      >
-        <input
-          ref={inputRef}
-          value={newContent}
-          onChange={(e) => setNewContent(e.target.value)}
-          placeholder="Add todo..."
-          className="flex-1 min-w-0 bg-transparent text-gray-300 placeholder-gray-600 outline-none text-xs py-0.5"
-        />
-        <button
-          type="submit"
-          className="text-gray-600 hover:text-gray-400 p-0.5 shrink-0"
+      {!readOnly && (
+        <form
+          className="flex items-center gap-1 p-1.5 border-b border-gray-800"
+          onSubmit={(e) => { e.preventDefault(); handleAdd() }}
         >
-          <Plus size={12} />
-        </button>
-      </form>
+          <input
+            ref={inputRef}
+            value={newContent}
+            onChange={(e) => setNewContent(e.target.value)}
+            placeholder="Add todo..."
+            className="flex-1 min-w-0 bg-transparent text-gray-300 placeholder-gray-600 outline-none text-xs py-0.5"
+          />
+          <button
+            type="submit"
+            className="text-gray-600 hover:text-gray-400 p-0.5 shrink-0"
+          >
+            <Plus size={12} />
+          </button>
+        </form>
+      )}
 
       {/* Todo list */}
       <div className="flex-1 overflow-y-auto">
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={readOnly ? undefined : handleDragEnd}>
           <SortableContext items={todos.map((t) => t.id)} strategy={verticalListSortingStrategy}>
             {todos.map((todo) => (
               <SortableTodoItem
                 key={todo.id}
                 todo={todo}
+                readOnly={readOnly}
                 onToggle={handleToggle}
                 onEdit={handleEdit}
                 onDelete={handleDelete}
@@ -127,12 +132,13 @@ export default function TodoList({ containerID }: TodoListProps) {
 
 interface SortableTodoItemProps {
   todo: Todo
+  readOnly?: boolean
   onToggle: (todo: Todo) => void
   onEdit: (todo: Todo, content: string) => void
   onDelete: (id: number) => void
 }
 
-function SortableTodoItem({ todo, onToggle, onEdit, onDelete }: SortableTodoItemProps) {
+function SortableTodoItem({ todo, readOnly, onToggle, onEdit, onDelete }: SortableTodoItemProps) {
   const [editing, setEditing] = useState(false)
   const [content, setContent] = useState(todo.content)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -169,22 +175,24 @@ function SortableTodoItem({ todo, onToggle, onEdit, onDelete }: SortableTodoItem
       className="flex items-center gap-1 px-1.5 py-1 border-b border-gray-800/50 group hover:bg-gray-800/30"
     >
       {/* Drag handle */}
-      <button
-        className="text-gray-700 hover:text-gray-500 cursor-grab active:cursor-grabbing p-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
-        {...attributes}
-        {...listeners}
-      >
-        <GripVertical size={10} />
-      </button>
+      {!readOnly && (
+        <button
+          className="text-gray-700 hover:text-gray-500 cursor-grab active:cursor-grabbing p-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical size={10} />
+        </button>
+      )}
 
       {/* Checkbox */}
       <button
-        onClick={() => onToggle(todo)}
+        onClick={() => !readOnly && onToggle(todo)}
         className={`w-3 h-3 rounded-sm border shrink-0 flex items-center justify-center transition-colors ${
           todo.done
             ? 'bg-emerald-600 border-emerald-600'
             : 'border-gray-600 hover:border-gray-400'
-        }`}
+        } ${readOnly ? 'cursor-default' : ''}`}
       >
         {todo.done && (
           <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
@@ -194,7 +202,7 @@ function SortableTodoItem({ todo, onToggle, onEdit, onDelete }: SortableTodoItem
       </button>
 
       {/* Content */}
-      {editing ? (
+      {editing && !readOnly ? (
         <form
           className="flex-1 min-w-0"
           onSubmit={(e) => { e.preventDefault(); commitEdit() }}
@@ -210,7 +218,7 @@ function SortableTodoItem({ todo, onToggle, onEdit, onDelete }: SortableTodoItem
         </form>
       ) : (
         <span
-          onDoubleClick={() => setEditing(true)}
+          onDoubleClick={() => !readOnly && setEditing(true)}
           className={`flex-1 min-w-0 truncate cursor-default select-none ${
             todo.done ? 'text-gray-600 line-through' : 'text-gray-300'
           }`}
@@ -220,12 +228,14 @@ function SortableTodoItem({ todo, onToggle, onEdit, onDelete }: SortableTodoItem
       )}
 
       {/* Delete */}
-      <button
-        onClick={() => onDelete(todo.id)}
-        className="text-gray-700 hover:text-red-400 p-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
-      >
-        <Trash2 size={10} />
-      </button>
+      {!readOnly && (
+        <button
+          onClick={() => onDelete(todo.id)}
+          className="text-gray-700 hover:text-red-400 p-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+        >
+          <Trash2 size={10} />
+        </button>
+      )}
     </div>
   )
 }

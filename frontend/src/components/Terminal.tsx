@@ -8,6 +8,7 @@ import '@xterm/xterm/css/xterm.css'
 interface TerminalProps {
   containerId: string
   connected: boolean
+  readOnly?: boolean
   onReconnected: () => void
   onReadOnly?: () => void
 }
@@ -35,11 +36,13 @@ const THEME = {
   brightWhite: '#f9fafb',
 }
 
-export default function Terminal({ containerId, connected, onReconnected, onReadOnly }: TerminalProps) {
+export default function Terminal({ containerId, connected, readOnly, onReconnected, onReadOnly }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerm | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
+  const readOnlyRef = useRef(readOnly)
+  readOnlyRef.current = readOnly
   const [disconnected, setDisconnected] = useState(!connected)
   const [reopening, setReopening] = useState(false)
   // Use a key to force full remount of the terminal when reopening
@@ -104,6 +107,7 @@ export default function Terminal({ containerId, connected, onReconnected, onRead
 
     // Keyboard input → WebSocket
     const onDataDisposable = term.onData((data) => {
+      if (readOnlyRef.current) return
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(new TextEncoder().encode(data))
       }

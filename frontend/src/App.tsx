@@ -74,6 +74,9 @@ export default function App() {
   const [activeId, setActiveId] = useState<string | null>(null)
   const [direction, setDirection] = useState(0)
 
+  // Counter that increments when todos change remotely, keyed by containerId
+  const [todoRefresh, setTodoRefresh] = useState<Record<string, number>>({})
+
   const connectNotifyWS = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const tokenParam = getAuthToken() ? `?token=${getAuthToken()}` : ''
@@ -84,10 +87,15 @@ export default function App() {
         if (msg.type === 'preempted') {
           setReadOnly(true)
         }
+        if (msg.type === 'todos-updated' && msg.containerId) {
+          setTodoRefresh((prev) => ({
+            ...prev,
+            [msg.containerId]: (prev[msg.containerId] ?? 0) + 1,
+          }))
+        }
       } catch { /* ignore */ }
     }
     ws.onclose = () => {
-      // Reconnect after 3s
       setTimeout(connectNotifyWS, 3000)
     }
     return ws
@@ -348,6 +356,8 @@ export default function App() {
                             onRename={handleRename}
                             onStatusChange={handleStatusChange}
                             onReadOnly={() => setReadOnly(true)}
+                            readOnly={readOnly}
+                            todoRefreshKey={todoRefresh[container.id] ?? 0}
                             currentPage={currentPage}
                             totalPages={totalPages}
                             onMoveToPage={moveToPage}

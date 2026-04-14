@@ -107,13 +107,17 @@ func New(devMode bool, mgr *container.Manager, db *store.Store, am *auth.Manager
 			return
 		}
 
+		broadcastTodoChange := func() {
+			am.Broadcast([]byte(`{"type":"todos-updated","containerId":"` + containerID + `"}`))
+		}
+
 		if len(parts) == 1 || parts[1] == "" {
-			// /api/todos/{containerID}
 			switch r.Method {
 			case http.MethodGet:
 				listTodos(db, containerID, w)
 			case http.MethodPost:
 				createTodo(db, containerID, w, r)
+				broadcastTodoChange()
 			default:
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			}
@@ -122,13 +126,12 @@ func New(devMode bool, mgr *container.Manager, db *store.Store, am *auth.Manager
 
 		todoPath := parts[1]
 
-		// /api/todos/{containerID}/reorder
 		if todoPath == "reorder" && r.Method == http.MethodPut {
 			reorderTodos(db, w, r)
+			broadcastTodoChange()
 			return
 		}
 
-		// /api/todos/{containerID}/{todoID}
 		todoID, err := strconv.ParseInt(todoPath, 10, 64)
 		if err != nil {
 			http.Error(w, "invalid todo id", http.StatusBadRequest)
@@ -138,8 +141,10 @@ func New(devMode bool, mgr *container.Manager, db *store.Store, am *auth.Manager
 		switch r.Method {
 		case http.MethodPatch:
 			updateTodo(db, todoID, w, r)
+			broadcastTodoChange()
 		case http.MethodDelete:
 			deleteTodo(db, todoID, w)
+			broadcastTodoChange()
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
