@@ -68,6 +68,8 @@ export default function Terminal({ containerId, connected, onReconnected }: Term
     ws.binaryType = 'arraybuffer'
 
     ws.onopen = () => {
+      // Reset terminal state before history replay
+      term.write('\x1bc')
       ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }))
     }
 

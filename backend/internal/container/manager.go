@@ -334,33 +334,9 @@ func (m *Manager) Rename(id, name string) bool {
 	return true
 }
 
-// ReadHistory reads the last portion of terminal output log (max 64KB).
+// ReadHistory reads the full terminal output log for a container.
 func (m *Manager) ReadHistory(id string) ([]byte, error) {
-	const maxBytes = 16 * 1024
-
-	f, err := os.Open(m.terminalLogPath(id))
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-
-	size := info.Size()
-	if size <= maxBytes {
-		return os.ReadFile(m.terminalLogPath(id))
-	}
-
-	// Read only the tail
-	buf := make([]byte, maxBytes)
-	_, err = f.ReadAt(buf, size-maxBytes)
-	if err != nil {
-		return nil, err
-	}
-	return buf, nil
+	return os.ReadFile(m.terminalLogPath(id))
 }
 
 // WriteToPTY writes data to the PTY session.
