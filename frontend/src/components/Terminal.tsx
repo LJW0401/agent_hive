@@ -106,7 +106,32 @@ export default function Terminal({ containerId, connected, onReconnected }: Term
     const resizeObserver = new ResizeObserver(handleResize)
     resizeObserver.observe(containerRef.current)
 
+    // Mobile touch scroll: translate touch drags into terminal scroll
+    let touchStartY = 0
+    let touchAccum = 0
+    const lineHeight = Math.ceil(term.options.fontSize! * 1.2)
+
+    const onTouchStart = (e: TouchEvent) => {
+      touchStartY = e.touches[0].clientY
+      touchAccum = 0
+    }
+    const onTouchMove = (e: TouchEvent) => {
+      const dy = touchStartY - e.touches[0].clientY
+      touchStartY = e.touches[0].clientY
+      touchAccum += dy
+      const lines = Math.trunc(touchAccum / lineHeight)
+      if (lines !== 0) {
+        term.scrollLines(lines)
+        touchAccum -= lines * lineHeight
+      }
+    }
+    const el = containerRef.current
+    el.addEventListener('touchstart', onTouchStart, { passive: true })
+    el.addEventListener('touchmove', onTouchMove, { passive: true })
+
     return () => {
+      el.removeEventListener('touchstart', onTouchStart)
+      el.removeEventListener('touchmove', onTouchMove)
       resizeObserver.disconnect()
       onDataDisposable.dispose()
       ws.close()

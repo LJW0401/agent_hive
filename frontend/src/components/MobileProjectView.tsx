@@ -146,7 +146,7 @@ export default function MobileProjectView({
         onTouchEnd={handleTouchEnd}
       >
         {/* Terminal */}
-        <div style={{ height: `${splitRatio * 100}%` }} className="min-h-0">
+        <div style={{ height: `${splitRatio * 100}%` }} className="min-h-0 overflow-hidden">
           <Terminal
             containerId={container.id}
             connected={container.connected}
@@ -163,7 +163,7 @@ export default function MobileProjectView({
         </div>
 
         {/* Todo list */}
-        <div style={{ height: `${(1 - splitRatio) * 100}%` }} className="min-h-0 overflow-hidden">
+        <div style={{ height: `${(1 - splitRatio) * 100}%` }} className="min-h-0 overflow-hidden overscroll-contain">
           <TodoList containerID={container.id} refreshKey={todoRefreshKey} />
         </div>
       </div>
