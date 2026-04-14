@@ -1,8 +1,13 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { Swiper, SwiperSlide } from 'swiper/react'
+import type { Swiper as SwiperType } from 'swiper'
+import 'swiper/css'
 import LoginPage from './components/LoginPage'
 import MobileProjectView from './components/MobileProjectView'
+import NewProjectSlot from './components/NewProjectSlot'
 import {
   listContainers,
+  createContainer,
   getMobileLayout,
   checkAuth,
   setAuthToken,
@@ -18,8 +23,8 @@ export default function MobileApp() {
   const [authState, setAuthState] = useState<'loading' | 'login' | 'ready'>('loading')
   const [containers, setContainers] = useState<Container[]>([])
   const [mobileLayout, setMobileLayout] = useState<MobileLayoutEntry[]>([])
-  const [currentIndex, setCurrentIndex] = useState(0)
   const [todoRefresh, setTodoRefresh] = useState<Record<string, number>>({})
+  const swiperRef = useRef<SwiperType | null>(null)
 
   const connectNotifyWS = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -78,7 +83,6 @@ export default function MobileApp() {
       const c = map.get(entry.containerId)
       if (c) sorted.push(c)
     }
-    // Append containers not in mobile layout (e.g. created before mobile layout existed)
     for (const c of containers) {
       if (!sorted.find((s) => s.id === c.id)) {
         sorted.push(c)
@@ -87,15 +91,6 @@ export default function MobileApp() {
     return sorted
   })()
 
-  // Clamp currentIndex
-  useEffect(() => {
-    if (sortedContainers.length === 0) {
-      setCurrentIndex(0)
-    } else if (currentIndex >= sortedContainers.length) {
-      setCurrentIndex(sortedContainers.length - 1)
-    }
-  }, [sortedContainers.length, currentIndex])
-
   const handleLogin = useCallback((token: string) => {
     setAuthToken(token)
     setAuthState('ready')
@@ -103,15 +98,36 @@ export default function MobileApp() {
     connectNotifyWS()
   }, [loadData, connectNotifyWS])
 
+  const handleCreate = useCallback(async () => {
+    try {
+      const c = await createContainer('New Project')
+      const ml = await getMobileLayout()
+      setContainers((prev) => [...prev, c])
+      setMobileLayout(ml)
+      // Slide to the new project (it's at the end, before the "new" slot)
+      setTimeout(() => {
+        swiperRef.current?.slideTo(ml.length - 1)
+      }, 100)
+    } catch (e) {
+      alert('Failed to create project')
+      console.error(e)
+    }
+  }, [])
+
   const handleClose = useCallback(async (id: string) => {
+    const currentSlide = swiperRef.current?.activeIndex ?? 0
     await deleteContainer(id)
-    // Remove from mobile layout
     const newLayout = mobileLayout
       .filter((e) => e.containerId !== id)
       .map((e, i) => ({ ...e, sortOrder: i }))
     setMobileLayout(newLayout)
     await updateMobileLayout(newLayout)
     loadData()
+    // Stay at previous project or clamp
+    setTimeout(() => {
+      const target = Math.min(currentSlide, newLayout.length - 1)
+      swiperRef.current?.slideTo(Math.max(0, target))
+    }, 100)
   }, [mobileLayout, loadData])
 
   const handleRename = useCallback(async (id: string, name: string) => {
@@ -127,6 +143,34 @@ export default function MobileApp() {
     )
   }, [])
 
+  const handleMoveLeft = useCallback(async (index: number) => {
+    if (index <= 0) return
+    const newLayout = [...mobileLayout].sort((a, b) => a.sortOrder - b.sortOrder)
+    // Swap with previous
+    const temp = newLayout[index]
+    newLayout[index] = newLayout[index - 1]
+    newLayout[index - 1] = temp
+    const reindexed = newLayout.map((e, i) => ({ ...e, sortOrder: i }))
+    setMobileLayout(reindexed)
+    await updateMobileLayout(reindexed)
+    loadData()
+    setTimeout(() => swiperRef.current?.slideTo(index - 1), 100)
+  }, [mobileLayout, loadData])
+
+  const handleMoveRight = useCallback(async (index: number) => {
+    const sorted = [...mobileLayout].sort((a, b) => a.sortOrder - b.sortOrder)
+    if (index >= sorted.length - 1) return
+    // Swap with next
+    const temp = sorted[index]
+    sorted[index] = sorted[index + 1]
+    sorted[index + 1] = temp
+    const reindexed = sorted.map((e, i) => ({ ...e, sortOrder: i }))
+    setMobileLayout(reindexed)
+    await updateMobileLayout(reindexed)
+    loadData()
+    setTimeout(() => swiperRef.current?.slideTo(index + 1), 100)
+  }, [mobileLayout, loadData])
+
   if (authState === 'loading') {
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-[#0a0a0b] gap-3">
@@ -140,25 +184,34 @@ export default function MobileApp() {
     return <LoginPage onLogin={handleLogin} />
   }
 
-  const currentContainer = sortedContainers[currentIndex] ?? null
-
   return (
     <div className="flex flex-col h-screen bg-[#0a0a0b]">
-      {currentContainer ? (
-        <MobileProjectView
-          container={currentContainer}
-          onClose={handleClose}
-          onRename={handleRename}
-          onStatusChange={handleStatusChange}
-          todoRefreshKey={todoRefresh[currentContainer.id] ?? 0}
-          index={currentIndex}
-          total={sortedContainers.length}
-        />
-      ) : (
-        <div className="flex items-center justify-center flex-1 text-gray-500">
-          No projects
-        </div>
-      )}
+      <Swiper
+        onSwiper={(s) => { swiperRef.current = s }}
+        spaceBetween={0}
+        slidesPerView={1}
+        touchAngle={45}
+        className="flex-1 w-full"
+      >
+        {sortedContainers.map((container, idx) => (
+          <SwiperSlide key={container.id} className="!flex flex-col h-full">
+            <MobileProjectView
+              container={container}
+              onClose={handleClose}
+              onRename={handleRename}
+              onStatusChange={handleStatusChange}
+              todoRefreshKey={todoRefresh[container.id] ?? 0}
+              index={idx}
+              total={sortedContainers.length}
+              onMoveLeft={() => handleMoveLeft(idx)}
+              onMoveRight={() => handleMoveRight(idx)}
+            />
+          </SwiperSlide>
+        ))}
+        <SwiperSlide className="!flex flex-col h-full items-center justify-center">
+          <NewProjectSlot onClick={handleCreate} />
+        </SwiperSlide>
+      </Swiper>
     </div>
   )
 }
