@@ -10,6 +10,7 @@ import (
 
 	"github.com/penguin/agent-hive/internal/auth"
 	"github.com/penguin/agent-hive/internal/container"
+	"github.com/penguin/agent-hive/internal/static"
 	"github.com/penguin/agent-hive/internal/store"
 	"github.com/penguin/agent-hive/internal/ws"
 )
@@ -34,19 +35,11 @@ func New(devMode bool, mgr *container.Manager, db *store.Store, am *auth.Manager
 		handleAuthCheck(am, w, r)
 	})
 
-	mux.HandleFunc("/api/auth/claim", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		handleAuthClaim(am, w, r)
-	})
-
-	// Session notification WebSocket
+	// Event broadcast WebSocket
 	mux.HandleFunc("/ws/notify", ws.HandleNotify(am))
 
-	// WebSocket endpoint for terminal (per container)
-	mux.HandleFunc("/ws/terminal", ws.HandleTerminal(mgr, am))
+	// Terminal WebSocket
+	mux.HandleFunc("/ws/terminal", ws.HandleTerminal(mgr))
 
 	// Container REST API
 	mux.HandleFunc("/api/containers", func(w http.ResponseWriter, r *http.Request) {
@@ -155,7 +148,7 @@ func New(devMode bool, mgr *container.Manager, db *store.Store, am *auth.Manager
 		proxy := httputil.NewSingleHostReverseProxy(viteURL)
 		mux.Handle("/", proxy)
 	} else {
-		mux.Handle("/", http.FileServer(http.Dir("../frontend/dist")))
+		mux.Handle("/", static.Handler())
 	}
 
 	return am.Middleware(mux)
@@ -174,7 +167,7 @@ func handleLogin(am *auth.Manager, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	session, err := am.Login(req.Password, req.MachineID)
+	token, err := am.Login(req.Password, req.MachineID)
 	if err != nil {
 		status := http.StatusUnauthorized
 		if err == auth.ErrMachineNotAllowed {
@@ -184,7 +177,7 @@ func handleLogin(am *auth.Manager, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(session)
+	json.NewEncoder(w).Encode(map[string]string{"token": token})
 }
 
 func handleAuthCheck(am *auth.Manager, w http.ResponseWriter, r *http.Request) {
@@ -197,32 +190,11 @@ func handleAuthCheck(am *auth.Manager, w http.ResponseWriter, r *http.Request) {
 	if token == "" {
 		token = r.Header.Get("X-Auth-Token")
 	}
-	readOnly, ok := am.Validate(token)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"enabled":  true,
-		"valid":    ok,
-		"readOnly": readOnly,
+		"enabled": true,
+		"valid":   am.ValidateToken(token),
 	})
-}
-
-func handleAuthClaim(am *auth.Manager, w http.ResponseWriter, r *http.Request) {
-	token := r.URL.Query().Get("token")
-	if token == "" {
-		token = r.Header.Get("X-Auth-Token")
-	}
-	if token == "" {
-		http.Error(w, "missing token", http.StatusBadRequest)
-		return
-	}
-	// Validate token is at least known (even if read-only/preempted)
-	_, ok := am.Validate(token)
-	if !ok {
-		http.Error(w, "invalid token", http.StatusUnauthorized)
-		return
-	}
-	am.Claim(token)
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- Container handlers ---

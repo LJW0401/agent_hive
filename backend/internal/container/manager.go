@@ -12,10 +12,54 @@ import (
 	ptypkg "github.com/penguin/agent-hive/internal/pty"
 )
 
-// Listener receives PTY output and disconnect events.
+// Listener receives PTY output and disconnect events via buffered channel.
 type Listener struct {
-	OnOutput     func([]byte)
+	ch   chan []byte
+	done chan struct{}
+
 	OnDisconnect func()
+}
+
+// NewListener creates a listener with a buffered output channel.
+func NewListener(onOutput func([]byte), onDisconnect func()) *Listener {
+	l := &Listener{
+		ch:           make(chan []byte, 64),
+		done:         make(chan struct{}),
+		OnDisconnect: onDisconnect,
+	}
+	// Goroutine drains the channel and calls onOutput outside any lock
+	go func() {
+		for {
+			select {
+			case data, ok := <-l.ch:
+				if !ok {
+					return
+				}
+				onOutput(data)
+			case <-l.done:
+				return
+			}
+		}
+	}()
+	return l
+}
+
+// Send queues data for the listener. Non-blocking: drops if buffer full.
+func (l *Listener) Send(data []byte) {
+	select {
+	case l.ch <- data:
+	default:
+		// drop if buffer full — better than blocking all listeners
+	}
+}
+
+// Close stops the listener goroutine.
+func (l *Listener) Close() {
+	select {
+	case <-l.done:
+	default:
+		close(l.done)
+	}
 }
 
 // Container represents a project container with an optional PTY session.
@@ -31,14 +75,7 @@ type Container struct {
 	listeners map[*Listener]bool
 }
 
-// Session returns the PTY session (nil if disconnected).
-func (c *Container) Session() *ptypkg.Session {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.session
-}
-
-// AddListener registers a listener for PTY output. Returns the listener for later removal.
+// AddListener registers a listener.
 func (c *Container) AddListener(l *Listener) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -48,11 +85,12 @@ func (c *Container) AddListener(l *Listener) {
 	c.listeners[l] = true
 }
 
-// RemoveListener unregisters a listener.
+// RemoveListener unregisters and closes a listener.
 func (c *Container) RemoveListener(l *Listener) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	delete(c.listeners, l)
+	c.mu.Unlock()
+	l.Close()
 }
 
 // Manager manages multiple containers.
@@ -177,6 +215,7 @@ func (m *Manager) Reopen(id string) error {
 }
 
 // pumpOutput reads from PTY and broadcasts to all listeners + log file.
+// IMPORTANT: callbacks are called OUTSIDE the lock to prevent deadlocks.
 func (m *Manager) pumpOutput(c *Container) {
 	buf := make([]byte, 4096)
 	for {
@@ -192,17 +231,22 @@ func (m *Manager) pumpOutput(c *Container) {
 			data := make([]byte, n)
 			copy(data, buf[:n])
 
+			// Write to log file under lock
 			c.mu.Lock()
 			if c.logFile != nil {
 				c.logFile.Write(data)
 			}
-			// Broadcast to all listeners
+			// Copy listener list under lock
+			listeners := make([]*Listener, 0, len(c.listeners))
 			for l := range c.listeners {
-				if l.OnOutput != nil {
-					l.OnOutput(data)
-				}
+				listeners = append(listeners, l)
 			}
 			c.mu.Unlock()
+
+			// Send to listeners OUTSIDE the lock via non-blocking channel
+			for _, l := range listeners {
+				l.Send(data)
+			}
 		}
 		if err != nil {
 			break
@@ -220,12 +264,17 @@ func (m *Manager) pumpOutput(c *Container) {
 		c.logFile = nil
 	}
 	c.Connected = false
+	listeners := make([]*Listener, 0, len(c.listeners))
 	for l := range c.listeners {
+		listeners = append(listeners, l)
+	}
+	c.mu.Unlock()
+
+	for _, l := range listeners {
 		if l.OnDisconnect != nil {
 			l.OnDisconnect()
 		}
 	}
-	c.mu.Unlock()
 }
 
 // Get returns a container by ID.
@@ -285,9 +334,33 @@ func (m *Manager) Rename(id, name string) bool {
 	return true
 }
 
-// ReadHistory reads the terminal output log for a container.
+// ReadHistory reads the last portion of terminal output log (max 64KB).
 func (m *Manager) ReadHistory(id string) ([]byte, error) {
-	return os.ReadFile(m.terminalLogPath(id))
+	const maxBytes = 16 * 1024
+
+	f, err := os.Open(m.terminalLogPath(id))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	size := info.Size()
+	if size <= maxBytes {
+		return os.ReadFile(m.terminalLogPath(id))
+	}
+
+	// Read only the tail
+	buf := make([]byte, maxBytes)
+	_, err = f.ReadAt(buf, size-maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	return buf, nil
 }
 
 // WriteToPTY writes data to the PTY session.

@@ -26,17 +26,11 @@ function authQuery(): string {
 export interface AuthCheck {
   enabled: boolean
   valid: boolean
-  readOnly: boolean
 }
 
 export async function checkAuth(): Promise<AuthCheck> {
   const res = await fetch(`/api/auth/check?${authQuery()}`)
   return res.json()
-}
-
-export async function claimSession(): Promise<boolean> {
-  const res = await fetch(`/api/auth/claim?${authQuery()}`, { method: 'POST' })
-  return res.ok
 }
 
 // --- Container API ---

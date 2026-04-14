@@ -28,7 +28,6 @@ import {
   getLayout,
   updateLayout,
   checkAuth,
-  claimSession,
   setAuthToken,
   getAuthToken,
   type Container,
@@ -67,14 +66,11 @@ function compactLayout(entries: LayoutEntry[]): LayoutEntry[] {
 
 export default function App() {
   const [authState, setAuthState] = useState<'loading' | 'login' | 'ready'>('loading')
-  const [readOnly, setReadOnly] = useState(false)
   const [containers, setContainers] = useState<Container[]>([])
   const [layout, setLayout] = useState<LayoutEntry[]>([])
   const [currentPage, setCurrentPage] = useState(0)
   const [activeId, setActiveId] = useState<string | null>(null)
   const [direction, setDirection] = useState(0)
-
-  // Counter that increments when todos change remotely, keyed by containerId
   const [todoRefresh, setTodoRefresh] = useState<Record<string, number>>({})
 
   const connectNotifyWS = useCallback(() => {
@@ -84,9 +80,6 @@ export default function App() {
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data)
-        if (msg.type === 'preempted') {
-          setReadOnly(true)
-        }
         if (msg.type === 'todos-updated' && msg.containerId) {
           setTodoRefresh((prev) => ({
             ...prev,
@@ -109,21 +102,17 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    checkAuth().then(async (auth) => {
+    checkAuth().then((auth) => {
       if (!auth.enabled) {
-        // No auth configured — go straight in
         setAuthState('ready')
         loadData()
+        connectNotifyWS()
         return
       }
       if (!auth.valid) {
-        // No valid token — show login
         setAuthState('login')
         return
       }
-      // Valid token exists — claim active control (preempt others)
-      await claimSession()
-      setReadOnly(false)
       setAuthState('ready')
       loadData()
       connectNotifyWS()
@@ -266,6 +255,35 @@ export default function App() {
     ? containers.find((c) => c.id === activeId) ?? null
     : null
 
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't capture when typing in inputs
+      const tag = (e.target as HTMLElement).tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+
+      const mod = e.ctrlKey || e.metaKey
+
+      // Ctrl/Cmd + N → new container
+      if (mod && e.key === 'n') {
+        e.preventDefault()
+        handleCreate()
+      }
+      // Ctrl/Cmd + ArrowLeft → previous page
+      if (mod && e.key === 'ArrowLeft') {
+        e.preventDefault()
+        if (currentPage > 0) goToPage(currentPage - 1)
+      }
+      // Ctrl/Cmd + ArrowRight → next page
+      if (mod && e.key === 'ArrowRight') {
+        e.preventDefault()
+        if (currentPage < totalPages - 1) goToPage(currentPage + 1)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [currentPage, totalPages, handleCreate, goToPage])
+
   const handleLogin = useCallback((token: string) => {
     setAuthToken(token)
     setAuthState('ready')
@@ -274,7 +292,12 @@ export default function App() {
   }, [loadData, connectNotifyWS])
 
   if (authState === 'loading') {
-    return <div className="flex items-center justify-center h-screen bg-[#0a0a0b] text-gray-500 text-sm">Loading...</div>
+    return (
+      <div className="flex flex-col items-center justify-center h-screen bg-[#0a0a0b] gap-3">
+        <div className="w-6 h-6 border-2 border-gray-700 border-t-gray-400 rounded-full animate-spin" />
+        <span className="text-gray-500 text-sm">Connecting...</span>
+      </div>
+    )
   }
 
   if (authState === 'login') {
@@ -283,11 +306,6 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-[#0a0a0b]">
-      {readOnly && (
-        <div className="bg-yellow-900/30 border-b border-yellow-800 px-4 py-1 text-center text-[11px] text-yellow-400">
-          Read-only mode — another device has control
-        </div>
-      )}
       <header className="flex items-center px-4 h-11 border-b border-gray-800 shrink-0">
         <h1 className="text-sm font-semibold text-gray-200 tracking-wide">
           Agent Hive
@@ -338,9 +356,14 @@ export default function App() {
             <motion.div
               key={currentPage}
               custom={direction}
-              initial={(d: number) => ({ x: d > 0 ? '50%' : '-50%', opacity: 0 })}
-              animate={{ x: 0, opacity: 1 }}
-              exit={(d: number) => ({ x: d > 0 ? '-50%' : '50%', opacity: 0 })}
+              variants={{
+                enter: (d: number) => ({ x: d > 0 ? '50%' : '-50%', opacity: 0 }),
+                center: { x: 0, opacity: 1 },
+                exit: (d: number) => ({ x: d > 0 ? '-50%' : '50%', opacity: 0 }),
+              }}
+              initial="enter"
+              animate="center"
+              exit="exit"
               transition={{ duration: 0.2, ease: 'easeInOut' }}
               className="absolute inset-0 p-2"
             >
@@ -355,8 +378,6 @@ export default function App() {
                             onClose={handleClose}
                             onRename={handleRename}
                             onStatusChange={handleStatusChange}
-                            onReadOnly={() => setReadOnly(true)}
-                            readOnly={readOnly}
                             todoRefreshKey={todoRefresh[container.id] ?? 0}
                             currentPage={currentPage}
                             totalPages={totalPages}

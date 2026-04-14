@@ -21,7 +21,7 @@ type resizeMsg struct {
 	Cols uint16 `json:"cols"`
 }
 
-// HandleNotify creates a handler for session-level notifications (preemption).
+// HandleNotify creates a handler for event broadcasts (todo sync, etc.).
 func HandleNotify(am *auth.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -41,25 +41,14 @@ func HandleNotify(am *auth.Manager) http.HandlerFunc {
 	}
 }
 
-// HandleTerminal creates a handler that connects a WebSocket to a container's PTY.
-func HandleTerminal(mgr *container.Manager, am *auth.Manager) http.HandlerFunc {
+// HandleTerminal connects a WebSocket to a container's PTY.
+// All authenticated devices can both read and write.
+func HandleTerminal(mgr *container.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		containerID := r.URL.Query().Get("id")
 		if containerID == "" {
 			http.Error(w, "missing container id", http.StatusBadRequest)
 			return
-		}
-
-		// Check auth and read-only status
-		readOnly := false
-		if am.Enabled() {
-			token := r.URL.Query().Get("token")
-			var ok bool
-			readOnly, ok = am.Validate(token)
-			if !ok {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
 		}
 
 		c, ok := mgr.Get(containerID)
@@ -87,11 +76,6 @@ func HandleTerminal(mgr *container.Manager, am *auth.Manager) http.HandlerFunc {
 			writeMsg(websocket.BinaryMessage, history)
 		}
 
-		// Send read-only status
-		if readOnly {
-			writeMsg(websocket.TextMessage, []byte(`{"type":"readonly","readOnly":true}`))
-		}
-
 		// If terminal disconnected, send status and close
 		if !c.Connected {
 			writeMsg(websocket.TextMessage, []byte(`{"type":"status","connected":false}`))
@@ -100,17 +84,17 @@ func HandleTerminal(mgr *container.Manager, am *auth.Manager) http.HandlerFunc {
 		}
 
 		// Register listener: PTY output -> this WebSocket
-		listener := &container.Listener{
-			OnOutput: func(data []byte) {
+		listener := container.NewListener(
+			func(data []byte) {
 				if err := writeMsg(websocket.BinaryMessage, data); err != nil {
 					log.Printf("ws write error: %v", err)
 				}
 			},
-			OnDisconnect: func() {
+			func() {
 				writeMsg(websocket.TextMessage, []byte(`{"type":"status","connected":false}`))
 				conn.Close()
 			},
-		}
+		)
 		c.AddListener(listener)
 
 		defer func() {
@@ -118,7 +102,7 @@ func HandleTerminal(mgr *container.Manager, am *auth.Manager) http.HandlerFunc {
 			conn.Close()
 		}()
 
-		// WebSocket -> PTY (skip writes in read-only mode)
+		// WebSocket -> PTY
 		for {
 			msgType, msg, err := conn.ReadMessage()
 			if err != nil {
@@ -131,17 +115,11 @@ func HandleTerminal(mgr *container.Manager, am *auth.Manager) http.HandlerFunc {
 			if msgType == websocket.TextMessage {
 				var resize resizeMsg
 				if err := json.Unmarshal(msg, &resize); err == nil && resize.Type == "resize" {
-					if !readOnly {
-						if err := c.ResizePTY(resize.Rows, resize.Cols); err != nil {
-							log.Printf("pty resize error: %v", err)
-						}
+					if err := c.ResizePTY(resize.Rows, resize.Cols); err != nil {
+						log.Printf("pty resize error: %v", err)
 					}
 					continue
 				}
-			}
-
-			if readOnly {
-				continue
 			}
 
 			if _, err := c.WriteToPTY(msg); err != nil {

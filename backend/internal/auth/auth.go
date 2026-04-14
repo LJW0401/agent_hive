@@ -5,28 +5,15 @@ import (
 	"encoding/hex"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-// Session represents an authenticated device session.
-type Session struct {
-	Token     string    `json:"token"`
-	MachineID string    `json:"machineId,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
-	ReadOnly  bool      `json:"readOnly"`
-}
-
-// Manager handles authentication and device session tracking.
+// Manager handles password authentication and event broadcasting.
 type Manager struct {
-	mu       sync.RWMutex
 	password string
 	machines []string
 
-	activeSession *Session
-
-	// All WebSocket connections for the active session (notify + terminal)
 	notifyMu sync.Mutex
 	notifyWS map[*websocket.Conn]bool
 }
@@ -45,10 +32,10 @@ func (m *Manager) Enabled() bool {
 	return m.password != ""
 }
 
-// Login validates credentials and creates a session.
-func (m *Manager) Login(password, machineID string) (*Session, error) {
+// Login validates password and optional machine whitelist.
+func (m *Manager) Login(password, machineID string) (string, error) {
 	if m.password != "" && password != m.password {
-		return nil, ErrInvalidPassword
+		return "", ErrInvalidPassword
 	}
 
 	if len(m.machines) > 0 && machineID != "" {
@@ -60,84 +47,33 @@ func (m *Manager) Login(password, machineID string) (*Session, error) {
 			}
 		}
 		if !allowed {
-			return nil, ErrMachineNotAllowed
+			return "", ErrMachineNotAllowed
 		}
 	}
 
-	token := generateToken()
-	session := &Session{
-		Token:     token,
-		MachineID: machineID,
-		CreatedAt: time.Now(),
-	}
-
-	m.mu.Lock()
-	hadOld := m.activeSession != nil
-	m.activeSession = session
-	m.mu.Unlock()
-
-	if hadOld {
-		m.notifyAllPreempted()
-	}
-
-	return session, nil
+	return generateToken(), nil
 }
 
-// Claim promotes an existing token to the active session, preempting others.
-// Used when a device refreshes and wants to re-take control.
-func (m *Manager) Claim(token string) bool {
-	m.mu.Lock()
-	if m.activeSession != nil && m.activeSession.Token == token {
-		m.mu.Unlock()
-		return true // already active
-	}
-	// Set this token as active
-	m.activeSession = &Session{
-		Token:     token,
-		CreatedAt: time.Now(),
-	}
-	m.mu.Unlock()
-
-	m.notifyAllPreempted()
-	return true
+// ValidateToken checks if a token is non-empty (any logged-in token is valid).
+func (m *Manager) ValidateToken(token string) bool {
+	return token != ""
 }
 
-// Validate checks if a session token is valid and returns whether it's read-only.
-func (m *Manager) Validate(token string) (readOnly bool, ok bool) {
-	if !m.Enabled() {
-		return false, true
-	}
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	if m.activeSession == nil {
-		return false, false
-	}
-
-	if m.activeSession.Token == token {
-		return false, true
-	}
-
-	// Token doesn't match active — it's been preempted, allow read-only
-	return true, true
-}
-
-// RegisterNotifyWS registers a WebSocket to receive session notifications.
+// RegisterNotifyWS registers a WebSocket for event broadcasts.
 func (m *Manager) RegisterNotifyWS(conn *websocket.Conn) {
 	m.notifyMu.Lock()
 	m.notifyWS[conn] = true
 	m.notifyMu.Unlock()
 }
 
-// UnregisterNotifyWS removes a WebSocket from notifications.
+// UnregisterNotifyWS removes a WebSocket.
 func (m *Manager) UnregisterNotifyWS(conn *websocket.Conn) {
 	m.notifyMu.Lock()
 	delete(m.notifyWS, conn)
 	m.notifyMu.Unlock()
 }
 
-// Broadcast sends a message to all registered notify WebSockets (without closing them).
+// Broadcast sends a message to all registered notify WebSockets.
 func (m *Manager) Broadcast(message []byte) {
 	m.notifyMu.Lock()
 	conns := make([]*websocket.Conn, 0, len(m.notifyWS))
@@ -151,29 +87,12 @@ func (m *Manager) Broadcast(message []byte) {
 	}
 }
 
-// notifyAllPreempted sends preemption message to all registered WebSockets and clears them.
-func (m *Manager) notifyAllPreempted() {
-	m.notifyMu.Lock()
-	conns := make([]*websocket.Conn, 0, len(m.notifyWS))
-	for c := range m.notifyWS {
-		conns = append(conns, c)
-	}
-	m.notifyWS = make(map[*websocket.Conn]bool)
-	m.notifyMu.Unlock()
-
-	for _, c := range conns {
-		c.WriteMessage(websocket.TextMessage, []byte(`{"type":"preempted"}`))
-		c.Close()
-	}
-}
-
 func generateToken() string {
 	b := make([]byte, 16)
 	rand.Read(b)
 	return hex.EncodeToString(b)
 }
 
-// Errors
 type AuthError string
 
 func (e AuthError) Error() string { return string(e) }
@@ -183,10 +102,11 @@ const (
 	ErrMachineNotAllowed AuthError = "machine not allowed"
 )
 
-// Middleware returns an HTTP middleware that enforces authentication.
+// Middleware enforces authentication on API/WS routes.
 func (m *Manager) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/check" || r.URL.Path == "/api/auth/claim" {
+		// Skip auth endpoints
+		if r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/check" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -196,6 +116,7 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// Skip static resources
 		if !isAPIorWS(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
@@ -206,8 +127,7 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 			token = r.Header.Get("X-Auth-Token")
 		}
 
-		_, ok := m.Validate(token)
-		if !ok {
+		if !m.ValidateToken(token) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

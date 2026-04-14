@@ -8,9 +8,7 @@ import '@xterm/xterm/css/xterm.css'
 interface TerminalProps {
   containerId: string
   connected: boolean
-  readOnly?: boolean
   onReconnected: () => void
-  onReadOnly?: () => void
 }
 
 const THEME = {
@@ -36,16 +34,13 @@ const THEME = {
   brightWhite: '#f9fafb',
 }
 
-export default function Terminal({ containerId, connected, readOnly, onReconnected, onReadOnly }: TerminalProps) {
+export default function Terminal({ containerId, connected, onReconnected }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerm | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
-  const readOnlyRef = useRef(readOnly)
-  readOnlyRef.current = readOnly
   const [disconnected, setDisconnected] = useState(!connected)
   const [reopening, setReopening] = useState(false)
-  // Use a key to force full remount of the terminal when reopening
   const [mountKey, setMountKey] = useState(0)
 
   useEffect(() => {
@@ -65,7 +60,6 @@ export default function Terminal({ containerId, connected, readOnly, onReconnect
     termRef.current = term
     fitAddonRef.current = fitAddon
 
-    // Connect WebSocket
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const tokenParam = getAuthToken() ? `&token=${getAuthToken()}` : ''
     const wsUrl = `${protocol}//${window.location.host}/ws/terminal?id=${containerId}${tokenParam}`
@@ -85,16 +79,6 @@ export default function Terminal({ containerId, connected, readOnly, onReconnect
             setDisconnected(true)
             return
           }
-          if (msg.type === 'preempted') {
-            term.write('\r\n\x1b[33m[Session preempted - read only]\x1b[0m\r\n')
-            onReadOnly?.()
-            return
-          }
-          if (msg.type === 'readonly') {
-            term.write('\x1b[33m[Read-only mode]\x1b[0m\r\n')
-            onReadOnly?.()
-            return
-          }
         } catch { /* not JSON */ }
         term.write(event.data)
       } else {
@@ -105,15 +89,12 @@ export default function Terminal({ containerId, connected, readOnly, onReconnect
     ws.onclose = () => {}
     ws.onerror = () => {}
 
-    // Keyboard input → WebSocket
     const onDataDisposable = term.onData((data) => {
-      if (readOnlyRef.current) return
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(new TextEncoder().encode(data))
       }
     })
 
-    // Resize handling
     const handleResize = () => {
       fitAddon.fit()
       if (ws.readyState === WebSocket.OPEN) {
@@ -140,7 +121,6 @@ export default function Terminal({ containerId, connected, readOnly, onReconnect
       await reopenContainer(containerId)
       setDisconnected(false)
       onReconnected()
-      // Force full terminal remount
       setMountKey((k) => k + 1)
     } catch (e) {
       console.error('reopen failed:', e)
