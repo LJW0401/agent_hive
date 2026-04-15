@@ -13,6 +13,7 @@ import (
 )
 
 const historyReplayLineLimit = 500
+const historyReplayByteLimit int64 = 256 * 1024
 
 // Listener receives PTY output and disconnect events via buffered channel.
 type Listener struct {
@@ -354,15 +355,20 @@ func (m *Manager) ReadHistory(id string) ([]byte, error) {
 		return nil, nil
 	}
 
-	var start int64
+	byteStart := size - historyReplayByteLimit
+	if byteStart < 0 {
+		byteStart = 0
+	}
+
+	start := byteStart
 	buf := make([]byte, 4096)
 	newlines := 0
 	offset := size
 
-	for offset > 0 && newlines <= historyReplayLineLimit {
+	for offset > byteStart && newlines <= historyReplayLineLimit {
 		chunkSize := int64(len(buf))
-		if offset < chunkSize {
-			chunkSize = offset
+		if offset-byteStart < chunkSize {
+			chunkSize = offset - byteStart
 		}
 		offset -= chunkSize
 
@@ -381,10 +387,6 @@ func (m *Manager) ReadHistory(id string) ([]byte, error) {
 				break
 			}
 		}
-	}
-
-	if start == 0 && newlines <= historyReplayLineLimit {
-		start = 0
 	}
 
 	history := make([]byte, size-start)
