@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { RotateCw } from 'lucide-react'
@@ -9,6 +9,10 @@ interface TerminalProps {
   containerId: string
   connected: boolean
   onReconnected: () => void
+}
+
+export interface TerminalHandle {
+  sendData: (data: string) => void
 }
 
 const THEME = {
@@ -34,7 +38,7 @@ const THEME = {
   brightWhite: '#f9fafb',
 }
 
-export default function Terminal({ containerId, connected, onReconnected }: TerminalProps) {
+const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal({ containerId, connected, onReconnected }, ref) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerm | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -42,6 +46,15 @@ export default function Terminal({ containerId, connected, onReconnected }: Term
   const [disconnected, setDisconnected] = useState(!connected)
   const [reopening, setReopening] = useState(false)
   const [mountKey, setMountKey] = useState(0)
+
+  useImperativeHandle(ref, () => ({
+    sendData: (data: string) => {
+      const ws = wsRef.current
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(new TextEncoder().encode(data))
+      }
+    },
+  }))
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -174,4 +187,6 @@ export default function Terminal({ containerId, connected, onReconnected }: Term
       )}
     </div>
   )
-}
+})
+
+export default Terminal

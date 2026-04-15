@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { X, Pencil, Check, ChevronLeft, ChevronRight } from 'lucide-react'
-import Terminal from './Terminal'
+import Terminal, { type TerminalHandle } from './Terminal'
+import ShortcutBar from './ShortcutBar'
 import TodoList from './TodoList'
 import type { Container } from '../api'
 
@@ -30,6 +31,7 @@ export default function MobileProjectView({
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(container.name)
   const inputRef = useRef<HTMLInputElement>(null)
+  const terminalRef = useRef<TerminalHandle>(null)
   const [splitRatio, setSplitRatio] = useState(0.5)
   const splitContainerRef = useRef<HTMLDivElement>(null)
   const draggingRef = useRef(false)
@@ -53,6 +55,10 @@ export default function MobileProjectView({
       setName(container.name)
     }
     setEditing(false)
+  }
+
+  const handleSendData = (data: string) => {
+    terminalRef.current?.sendData(data)
   }
 
   // Split pane touch handlers
@@ -146,12 +152,16 @@ export default function MobileProjectView({
         onTouchEnd={handleTouchEnd}
       >
         {/* Terminal */}
-        <div style={{ height: `${splitRatio * 100}%` }} className="min-h-0 overflow-hidden">
-          <Terminal
-            containerId={container.id}
-            connected={container.connected}
-            onReconnected={() => onStatusChange(container.id, true)}
-          />
+        <div style={{ height: `${splitRatio * 100}%` }} className="min-h-0 overflow-hidden flex flex-col">
+          <div className="flex-1 min-h-0">
+            <Terminal
+              ref={terminalRef}
+              containerId={container.id}
+              connected={container.connected}
+              onReconnected={() => onStatusChange(container.id, true)}
+            />
+          </div>
+          <ShortcutBar onSend={handleSendData} />
         </div>
 
         {/* Drag handle */}
