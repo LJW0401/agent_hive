@@ -102,15 +102,17 @@ type Manager struct {
 	containers map[string]*Container
 	nextID     atomic.Int64
 	dataDir    string
+	ptyOpts    *ptypkg.SessionOptions
 }
 
 // NewManager creates a new container manager.
-func NewManager(dataDir string) *Manager {
+func NewManager(dataDir string, ptyOpts *ptypkg.SessionOptions) *Manager {
 	termDir := filepath.Join(dataDir, "terminals")
 	os.MkdirAll(termDir, 0755)
 	return &Manager{
 		containers: make(map[string]*Container),
 		dataDir:    dataDir,
+		ptyOpts:    ptyOpts,
 	}
 }
 
@@ -122,7 +124,7 @@ func (m *Manager) terminalLogPath(id string) string {
 func (m *Manager) Create(name string) (*Container, error) {
 	id := fmt.Sprintf("c-%d", m.nextID.Add(1))
 
-	session, err := ptypkg.NewSession()
+	session, err := ptypkg.NewSession(m.ptyOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +196,7 @@ func (m *Manager) Reopen(id string) error {
 		return fmt.Errorf("container already connected")
 	}
 
-	session, err := ptypkg.NewSession()
+	session, err := ptypkg.NewSession(m.ptyOpts)
 	if err != nil {
 		c.mu.Unlock()
 		return err

@@ -1,13 +1,23 @@
 package pty
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/user"
+	"strconv"
 	"sync"
+	"syscall"
 
 	"github.com/creack/pty"
 )
+
+// SessionOptions configures a PTY session.
+type SessionOptions struct {
+	User  string // target username (empty = current user)
+	Shell string // shell path (empty = auto-detect)
+}
 
 // Session wraps a PTY process.
 type Session struct {
@@ -17,14 +27,19 @@ type Session struct {
 }
 
 // NewSession starts a new shell in a PTY.
-func NewSession() (*Session, error) {
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/bash"
+// If opts is nil, defaults to the current user's shell.
+func NewSession(opts *SessionOptions) (*Session, error) {
+	shell, env, sysAttr, dir, err := resolveSessionParams(opts)
+	if err != nil {
+		return nil, err
 	}
 
 	cmd := exec.Command(shell)
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	cmd.Env = env
+	cmd.Dir = dir
+	if sysAttr != nil {
+		cmd.SysProcAttr = sysAttr
+	}
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
@@ -35,6 +50,108 @@ func NewSession() (*Session, error) {
 		ptmx: ptmx,
 		cmd:  cmd,
 	}, nil
+}
+
+func resolveSessionParams(opts *SessionOptions) (shell string, env []string, sysAttr *syscall.SysProcAttr, dir string, err error) {
+	if opts == nil {
+		opts = &SessionOptions{}
+	}
+
+	isRoot := os.Getuid() == 0
+	targetUser := opts.User
+	shell = opts.Shell
+
+	if targetUser != "" && isRoot {
+		u, lookupErr := user.Lookup(targetUser)
+		if lookupErr != nil {
+			return "", nil, nil, "", fmt.Errorf("lookup user %q: %w", targetUser, lookupErr)
+		}
+
+		uid, _ := strconv.Atoi(u.Uid)
+		gid, _ := strconv.Atoi(u.Gid)
+
+		sysAttr = &syscall.SysProcAttr{
+			Credential: &syscall.Credential{
+				Uid: uint32(uid),
+				Gid: uint32(gid),
+			},
+		}
+
+		dir = u.HomeDir
+		if shell == "" {
+			shell = lookupShellFromPasswd(targetUser)
+		}
+
+		env = buildUserEnv(u, shell)
+	} else {
+		// Non-root or no target user: use current process settings
+		if shell == "" {
+			shell = os.Getenv("SHELL")
+			if shell == "" {
+				shell = "/bin/bash"
+			}
+		}
+		dir = ""
+		env = append(os.Environ(), "TERM=xterm-256color")
+	}
+
+	return shell, env, sysAttr, dir, nil
+}
+
+func buildUserEnv(u *user.User, shell string) []string {
+	return []string{
+		"HOME=" + u.HomeDir,
+		"USER=" + u.Username,
+		"LOGNAME=" + u.Username,
+		"SHELL=" + shell,
+		"TERM=xterm-256color",
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+	}
+}
+
+func lookupShellFromPasswd(username string) string {
+	data, err := os.ReadFile("/etc/passwd")
+	if err != nil {
+		return "/bin/bash"
+	}
+	for _, line := range splitLines(data) {
+		fields := splitColon(line)
+		if len(fields) >= 7 && fields[0] == username {
+			s := fields[6]
+			if s != "" {
+				return s
+			}
+		}
+	}
+	return "/bin/bash"
+}
+
+func splitLines(data []byte) []string {
+	var lines []string
+	start := 0
+	for i, b := range data {
+		if b == '\n' {
+			lines = append(lines, string(data[start:i]))
+			start = i + 1
+		}
+	}
+	if start < len(data) {
+		lines = append(lines, string(data[start:]))
+	}
+	return lines
+}
+
+func splitColon(s string) []string {
+	var parts []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == ':' {
+			parts = append(parts, s[start:i])
+			start = i + 1
+		}
+	}
+	parts = append(parts, s[start:])
+	return parts
 }
 
 // Read reads from the PTY output.
