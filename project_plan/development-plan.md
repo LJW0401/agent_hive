@@ -1,6 +1,6 @@
-# Agent Hive 移动端适配 开发方案
+# Agent Hive 功能增强 开发方案
 
-> 创建日期：2026-04-14
+> 创建日期：2026-04-16
 > 状态：已审核
 > 版本：v1.1
 > 关联需求文档：project_plan/requirements.md
@@ -9,479 +9,499 @@
 
 ### 1.1 技术架构
 
-在现有架构基础上扩展移动端支持：
-
 ```
-┌─────────────────────────────────┐
-│           Browser               │
-│  ┌───────────┬────────────────┐ │
-│  │ isMobile  │                │ │
-│  │   = true  │  = false       │ │
-│  │     ▼     │     ▼          │ │
-│  │ MobileApp │ App (desktop)  │ │
-│  │ (Swiper)  │ (2×2 grid)    │ │
-│  └───────────┴────────────────┘ │
-│            │  WS + REST         │
-└────────────┼────────────────────┘
-             ▼
-┌─────────────────────────────────┐
-│         Go Backend              │
-│  /api/layout        → layouts   │
-│  /api/mobile-layout → mobile_   │
-│                       layouts   │
-└─────────────────────────────────┘
-```
+┌─────────────────────────────────────────────────────┐
+│  CLI 入口 (os.Args 子命令分发)                        │
+│  init | install | uninstall | start | stop |         │
+│  restart | status | logs | run                       │
+├─────────────────────────────────────────────────────┤
+│  Config 层 (config.yaml)                             │
+│  port / data_dir / token / machines / user / shell   │
+├──────────────────────┬──────────────────────────────┤
+│  HTTP Server         │  日志层                       │
+│  REST API + WS       │  MultiWriter(stdout + file)  │
+│  go:embed 前端       │  按天轮转 / 7天保留           │
+├──────────────────────┴──────────────────────────────┤
+│  Container Manager                                   │
+│  PTY Session (用户身份切换: config > 文件归属 > 当前)  │
+├─────────────────────────────────────────────────────┤
+│  Store (SQLite)  │  Terminal Logs (磁盘文件)         │
+└─────────────────────────────────────────────────────┘
 
-- 前端通过 User-Agent 判断设备类型，渲染不同的顶层组件
-- 后端新增 `mobile_layouts` 表和对应 API，与桌面端 `layouts` 表独立
-- 移动端复用现有的容器管理、终端 WebSocket、待办 API
+前端:
+┌─────────────────────────────────────────────────────┐
+│  桌面端 App                                          │
+│  ProjectContainer: [TodoList | 分割线 | Terminal]    │
+│  分割线可拖拽, todo 可隐藏, 最大 2/3                  │
+├─────────────────────────────────────────────────────┤
+│  移动端 MobileApp (Swiper)                           │
+│  MobileProjectView: [Terminal / 拖拽分隔 / TodoList] │
+│  底部快捷键栏: ^C ^L Tab Esc ↑↓←→ 粘贴             │
+└─────────────────────────────────────────────────────┘
+```
 
 ### 1.2 技术栈
 
 | 类别 | 选择 | 说明 |
 |------|------|------|
-| 滑动导航 | Swiper.js | 成熟的触摸滑动库，`touchAngle: 45` 解决手势冲突 |
-| 分割面板 | 手写 touch 事件 | 逻辑简单，不需要引入额外库 |
-| 设备检测 | navigator.userAgent | 正则匹配手机 UA 关键词 |
-| 其余 | 沿用现有技术栈 | React, TypeScript, Tailwind, xterm.js, Go, SQLite |
+| 后端语言 | Go 1.21+ | 现有技术栈 |
+| 前端框架 | React + TypeScript + Vite | 现有技术栈 |
+| 终端模拟 | xterm.js + FitAddon | 现有技术栈 |
+| CSS | Tailwind CSS | 现有技术栈 |
+| CLI 解析 | Go 标准库 (os.Args + flag) | 手动子命令分发，不引入第三方库 |
+| 日志轮转 | 自实现 io.Writer | 按天轮转，不引入第三方库 |
+| PTY 用户切换 | syscall.SysProcAttr.Credential | 进程级 setuid/setgid |
+| 前端测试 | Vitest | Vite 生态，dev dependency |
+| 后端测试 | go test | Go 标准库 |
 
 ### 1.3 项目结构变更
 
 ```
-frontend/src/
-├── App.tsx              # 修改：设备检测 → 路由到 MobileApp 或桌面端
-├── MobileApp.tsx        # 新增：移动端主组件（Swiper 容器）
-├── utils/
-│   └── device.ts        # 新增：isMobile() 工具函数
-├── components/
-│   ├── MobileProjectView.tsx   # 新增：移动端单项目视图
-│   └── ResizableSplitPane.tsx  # 新增：可拖拽分割面板
-├── api.ts               # 修改：新增 mobile layout API 函数
+backend/
+├── cmd/server/main.go          # 重构: 子命令分发入口
+└── internal/
+    ├── cli/                    # 新增: 子命令实现
+    │   ├── init.go             # agent-hive init
+    │   ├── install.go          # agent-hive install
+    │   ├── uninstall.go        # agent-hive uninstall
+    │   ├── service.go          # start/stop/restart/status/logs
+    │   └── run.go              # agent-hive run (原 main 逻辑)
+    ├── config/config.go        # 修改: 增加 user/shell 字段
+    ├── logger/                 # 新增: 日志文件 + 轮转
+    │   └── logger.go
+    ├── pty/session.go          # 修改: 支持用户身份切换
+    └── ...
 
-backend/internal/
-├── store/
-│   ├── store.go          # 修改：新增 mobile_layouts 表迁移
-│   └── mobile_layout.go  # 新增：mobile layout CRUD
-├── server/
-│   └── server.go         # 修改：新增 mobile layout API 路由
+frontend/src/
+├── components/
+│   ├── ProjectContainer.tsx    # 修改: 拖拽分割线替代固定 w-48
+│   ├── TodoList.tsx            # 修改: 文本换行
+│   ├── MobileProjectView.tsx   # 修改: 集成快捷键栏
+│   ├── ShortcutBar.tsx         # 新增: 移动端快捷键栏
+│   └── PasteModal.tsx          # 新增: 粘贴弹窗
+└── ...
 ```
 
 ### 1.4 安全门控命令
 
+- 后端编译检查：`cd backend && go build ./...`
+- 后端测试：`cd backend && go test ./...`
 - 前端类型检查：`cd frontend && npx tsc --noEmit`
-- 前端构建检查：`cd frontend && npm run build`
-- 后端构建检查：`cd backend && go build ./...`
+- 前端测试：`cd frontend && npx vitest run`
+- 完整构建：`make build`
 
 ## 2. 开发阶段
 
-### 阶段 1：基础设施（后端 + 设备检测）
+### 阶段 1：前端体验优化
 
-**目标**：搭建移动端布局的后端存储和 API，实现前端设备检测和路由分流
+**目标**：桌面端支持拖拽调整待办/终端比例，待办文本自动换行。
 
 **涉及的需求项**：
-- 2.1.1 User-Agent 设备识别
-- 2.7.1 手机端布局独立存储（存储层）
+- 2.1.1 拖拽分割线调整比例
+- 2.2.1 待办项自动换行显示
 
 #### 工作项列表
 
-##### WI-1.1 [S] 后端：新增 mobile_layouts 表
-- **描述**：在 `store.go` 的 `migrate` 函数中添加 `mobile_layouts` 表的建表语句，字段为 `container_id`（主键）、`sort_order`（排序序号）
+##### WI-1.1 [S] 待办文本换行
+- **描述**：在 `TodoList.tsx` 中移除 `truncate` 类，改为 `break-words whitespace-normal` 实现自动换行。同时调整 item 布局为 `items-start` 使多行文本与复选框顶部对齐。
 - **验收标准**：
-  1. 服务启动后 SQLite 中存在 `mobile_layouts` 表
-  2. 安全门控：`cd backend && go build ./...` 通过
+  1. 超过列表宽度的待办文本自动换行，完整显示
+  2. 复选框、拖拽手柄与文本首行顶部对齐
+  3. 安全门控：`cd frontend && npx tsc --noEmit` 通过
 - **Notes**：
-  - Pattern：与 `layouts` 表结构类似但更简单，移动端只需一维排序
-  - Reference：`backend/internal/store/store.go` migrate 函数
-  - Hook point：WI-1.2 将基于此表实现 CRUD
+  - Pattern：CSS `word-break: break-word` + flexbox `align-items: flex-start`
+  - Reference：`frontend/src/components/TodoList.tsx:197` 的 `truncate` 类
+  - Hook point：与 WI-1.3 分割线联动（宽度变化时文本重新换行）
 
-##### WI-1.2 [S] 后端：mobile layout CRUD
-- **描述**：新建 `backend/internal/store/mobile_layout.go`，实现 `GetMobileLayout`、`SetMobileLayout`、`AddMobileLayoutEntry`、`RemoveMobileLayoutEntry` 方法
+##### WI-1.2 [M] 桌面端拖拽分割线
+- **描述**：在 `ProjectContainer.tsx` 中将固定 `w-48` 的 TodoList 改为可变宽度。在 TodoList 和 Terminal 之间添加可拖拽的分割线（4px 宽，`cursor-col-resize`）。通过 `mousedown` + `mousemove` + `mouseup` 事件实现拖拽。使用比例（ratio）而非像素值控制宽度。约束：todo 最大 2/3，可拖到 0 完全隐藏。拖拽结束后触发终端 `fitAddon.fit()`。
 - **验收标准**：
-  1. `GetMobileLayout` 返回按 `sort_order` 排序的条目列表
-  2. `SetMobileLayout` 原子替换整个布局
-  3. `AddMobileLayoutEntry` 在末尾追加条目
-  4. `RemoveMobileLayoutEntry` 删除指定容器条目
-  5. 安全门控：`cd backend && go build ./...` 通过
+  1. 拖拽分割线可实时调整待办/终端宽度比例
+  2. 待办列表可完全隐藏（ratio=0），终端占满
+  3. 待办列表宽度不超过容器 2/3
+  4. 拖拽结束后终端自动 refit
+  5. 安全门控：`cd frontend && npx tsc --noEmit` 通过
 - **Notes**：
-  - Pattern：参照 `layout.go` 的实现模式
-  - Reference：`backend/internal/store/layout.go`
-  - Hook point：WI-1.3 的 API 层将调用这些方法
+  - Pattern：React state `splitRatio` + `onMouseDown/Move/Up`，参考 MobileProjectView 的上下分割实现
+  - Reference：`frontend/src/components/ProjectContainer.tsx:103-116`，`frontend/src/components/MobileProjectView.tsx:59-79`
+  - Hook point：Terminal 的 `ResizeObserver` 已存在，会自动触发 refit
 
-##### WI-1.3 [S] 后端：mobile layout API 路由
-- **描述**：在 `server.go` 中新增 `/api/mobile-layout` 路由（GET 获取、PUT 更新），创建/删除容器时同步操作 `mobile_layouts` 表
+##### WI-1.3 [S] 阶段 1 前端测试
+- **描述**：配置 Vitest，编写组件测试：(1) TodoList 文本换行验证；(2) 分割线拖拽边界约束（最大 2/3、可隐藏到 0）。
 - **验收标准**：
-  1. `GET /api/mobile-layout` 返回移动端布局 JSON
-  2. `PUT /api/mobile-layout` 更新移动端布局
-  3. 创建容器时自动在 `mobile_layouts` 末尾追加条目
-  4. 删除容器时自动移除 `mobile_layouts` 中的条目
-  5. 安全门控：`cd backend && go build ./...` 通过
+  1. Vitest 配置完成，`npx vitest run` 可执行
+  2. 测试覆盖文本换行（无 truncate）和分割线边界约束
+  3. 安全门控：`cd frontend && npx vitest run` 通过
 - **Notes**：
-  - Pattern：与 `/api/layout` 路由结构一致
-  - Reference：`backend/internal/server/server.go` 中的 layout API
-  - Hook point：前端 `api.ts` 将调用这些端点
+  - Pattern：`@testing-library/react` + Vitest
+  - Reference：`frontend/vite.config.ts` 添加 test 配置
+  - Hook point：后续阶段复用 Vitest 配置
 
-##### WI-1.4 [S] 测试：后端构建与 API 验证
-- **描述**：启动服务，用 curl 验证 mobile layout API 的 GET/PUT 功能正常，创建/删除容器后 mobile layout 自动同步
+##### WI-1.4 [集成门控] 阶段 1 集成验证
+- **描述**：验证 WI-1.1 ~ WI-1.3 的集成状态。
 - **验收标准**：
-  1. curl 测试 GET/PUT /api/mobile-layout 返回正确数据
-  2. 创建容器后 mobile layout 中出现新条目
-  3. 删除容器后 mobile layout 中对应条目消失
+  1. `cd frontend && npx tsc --noEmit` 通过
+  2. `cd frontend && npx vitest run` 通过
+  3. `make build` 构建成功
+  4. 浏览器手动验证：拖拽分割线流畅，文本换行正确，隐藏/最大限制生效
+
+**阶段验收标准**：
+1. Given 桌面端打开项目容器, When 拖拽分割线向右, Then 待办列表增宽，终端缩窄并自动 refit
+2. Given 拖拽分割线到最左, When 松开鼠标, Then 待办列表隐藏，终端占满
+3. Given 待办列表宽度接近 2/3, When 继续拖拽, Then 不再增宽
+4. Given 待办文本超长, When 页面渲染, Then 文本自动换行完整显示
+5. 所有安全门控命令通过
+
+**阶段状态**：已完成
+**完成日期**：2026-04-16
+**验收结果**：通过
+**安全门控**：全部通过
+**集成门控**：全部通过
+**备注**：文本换行和拖拽分割线功能实现完成，Vitest 测试配置就绪
+
+---
+
+### 阶段 2：后端基础设施
+
+**目标**：重构 CLI 为子命令架构，扩展 config 支持 user/shell，实现日志轮转和 PTY 用户身份切换，实现 init 命令。
+
+**涉及的需求项**：
+- 2.3.1 init 命令
+- 2.3.7 PTY 以配置用户身份启动
+- 2.3.8 run 命令
+- 2.4.1 运行日志写入文件
+- 2.4.2 日志按天轮转
+
+#### 工作项列表
+
+##### WI-2.1 [M] CLI 子命令框架 + run 命令
+- **描述**：重构 `cmd/server/main.go`，将当前启动逻辑提取到 `internal/cli/run.go`。`main()` 改为 `os.Args[1]` 子命令分发。`run` 子命令保持原有 `--config` 和 `--dev` flag。无子命令时输出 usage 帮助信息。
+- **验收标准**：
+  1. `agent-hive run --config config.yaml` 等同于原来的启动方式
+  2. `agent-hive`（无参数）输出子命令帮助列表
+  3. 未知子命令输出错误提示和 usage
   4. 安全门控：`cd backend && go build ./...` 通过
+- **Notes**：
+  - Pattern：`os.Args` switch + 每个子命令独立 `flag.FlagSet`
+  - Reference：`backend/cmd/server/main.go` 当前 main 逻辑
+  - Hook point：后续 init/install 等命令复用同一分发框架
 
-##### WI-1.5 [集成门控] 后端 mobile layout 功能完整
-- **描述**：验证 WI-1.1 ~ WI-1.4 的集成状态
+##### WI-2.2 [S] Config 扩展 — user/shell 字段
+- **描述**：在 `config.Config` 结构体中增加 `User string` 和 `Shell string` 字段（yaml tag: `user`、`shell`）。加载 config 后，如果 user/shell 为空，通过 config 文件归属用户推断：`os.Stat(configPath)` → `Sys().(*syscall.Stat_t).Uid` → `user.LookupId` → 用户名和默认 shell。
+- **验收标准**：
+  1. config.yaml 中设置 user/shell 后能正确解析
+  2. 未设置时通过文件 owner 正确推断用户和 shell
+  3. 安全门控：`cd backend && go build ./...` 通过
+- **Notes**：
+  - Pattern：`os/user.LookupId` 获取用户信息，解析 `/etc/passwd` 获取 shell
+  - Reference：`backend/internal/config/config.go`
+  - Hook point：被 WI-2.5 PTY 用户切换和 WI-2.6 init 命令使用
+
+##### WI-2.3 [M] 日志文件写入 + 按天轮转
+- **描述**：新建 `internal/logger/logger.go`，实现 `RotatingWriter` 结构体（实现 `io.Writer`）。每次 Write 时检查日期是否变更，变更时重命名当前文件为 `agent-hive.YYYY-MM-DD.log`，创建新文件，清理 7 天前的旧文件。在 `run` 命令启动时创建 `io.MultiWriter(os.Stdout, rotatingWriter)` 设置为 `log` 包的输出。日志路径为二进制文件所在目录下的 `agent-hive.log`。
+- **验收标准**：
+  1. 程序启动后在二进制同目录生成 `agent-hive.log`
+  2. 日志同时输出到 stdout 和文件
+  3. 日志包含时间戳
+  4. 重启后追加而非覆盖
+  5. 安全门控：`cd backend && go build ./...` 通过
+- **Notes**：
+  - Pattern：`io.Writer` 接口包装，`sync.Mutex` 保护并发写入
+  - Reference：无现有文件，新建 `backend/internal/logger/`
+  - Hook point：`run` 命令初始化时调用
+
+##### WI-2.4 [S] 测试 — 日志轮转 + Config 推断
+- **描述**：编写 Go 测试：(1) 日志轮转：模拟日期变更触发文件轮转和过期清理；(2) Config 用户推断逻辑：config 显式配置 > 文件归属 > 当前用户的优先级。
+- **验收标准**：
+  1. `cd backend && go test ./internal/logger/... ./internal/config/...` 通过
+  2. 覆盖日志轮转（日期变更、过期清理）和 Config 用户推断优先级
+  3. 安全门控：`cd backend && go test ./...` 通过
+- **Notes**：
+  - Pattern：Go table-driven tests，临时目录模拟文件操作
+  - Reference：`backend/internal/logger/`、`backend/internal/config/`
+  - Hook point：CI 集成
+
+##### WI-2.5 [M] PTY 用户身份切换
+- **描述**：修改 `pty.NewSession()`，接收可选的 user/shell 参数。当 user 不为空且当前进程为 root 时，通过 `user.Lookup(username)` 获取 UID/GID，设置 `cmd.SysProcAttr.Credential`。设置 `cmd.Dir` 为用户 home 目录。重建 `cmd.Env`：HOME、USER、LOGNAME、SHELL、TERM、PATH。Container Manager 创建 PTY 时从 config 读取 user/shell 传入。
+- **验收标准**：
+  1. config 中 user=penguin, shell=/bin/zsh 时，PTY 以 penguin 用户运行 zsh
+  2. 非 root 运行时忽略 user 配置，使用当前用户
+  3. 终端中 `whoami` 输出配置的用户名
+  4. 安全门控：`cd backend && go build ./...` 通过
+- **Notes**：
+  - Pattern：`syscall.SysProcAttr{Credential: &syscall.Credential{Uid, Gid}}`
+  - Reference：`backend/internal/pty/session.go:20-38`，`backend/internal/container/manager.go`
+  - Hook point：Manager.Create() 和 Manager.Reopen() 调用 NewSession 时传参
+
+##### WI-2.6 [S] init 命令
+- **描述**：实现 `internal/cli/init.go`。嗅探当前用户（`os/user.Current()`）和默认 shell（解析 `/etc/passwd`）。支持 `--user` 和 `--shell` 参数覆盖。校验用户存在性和 shell 路径存在性。生成 config.yaml（包含 port、data_dir、token、user、shell、machines）。文件已存在时提示覆盖确认。
+- **验收标准**：
+  1. `agent-hive init` 生成 config.yaml，user/shell 为当前用户信息
+  2. `--user`/`--shell` 可覆盖默认值
+  3. 不存在的用户或 shell 路径给出错误提示
+  4. 文件已存在时提示确认
+  5. 安全门控：`cd backend && go build ./...` 通过
+- **Notes**：
+  - Pattern：`flag.FlagSet` 解析子命令参数，`yaml.Marshal` 生成配置文件
+  - Reference：`backend/internal/config/config.go` 的 Config 结构体
+  - Hook point：生成的 config.yaml 被 run/install 命令使用
+
+##### WI-2.7 [S] 测试 — PTY 用户推断 + init 校验
+- **描述**：编写 Go 测试：(1) PTY 用户推断逻辑（非 root 时跳过 setuid）；(2) init 命令参数校验（无效用户/shell 报错）。
+- **验收标准**：
+  1. `cd backend && go test ./internal/pty/... ./internal/cli/...` 通过
+  2. 覆盖 PTY 非 root 路径和 init 参数校验
+  3. 安全门控：`cd backend && go test ./...` 通过
+- **Notes**：
+  - Pattern：Go table-driven tests
+  - Reference：`backend/internal/pty/`、`backend/internal/cli/`
+  - Hook point：CI 集成
+
+##### WI-2.8 [集成门控] 阶段 2 完整集成验证
+- **描述**：验证阶段 2 所有工作项的集成状态。
 - **验收标准**：
   1. `cd backend && go build ./...` 通过
-  2. mobile_layouts 表结构正确
-  3. API 端点可正常读写
-  4. 容器增删自动同步 mobile layout
-
-##### WI-1.6 [S] 前端：isMobile() 工具函数
-- **描述**：新建 `frontend/src/utils/device.ts`，导出 `isMobile()` 函数，通过正则匹配 `navigator.userAgent` 中的手机关键词（iPhone, Android + Mobile, iPod 等），平板归类为桌面端
-- **验收标准**：
-  1. iPhone Safari UA 返回 `true`
-  2. Android Chrome（手机）UA 返回 `true`
-  3. iPad UA 返回 `false`
-  4. 桌面浏览器 UA 返回 `false`
-  5. 安全门控：`cd frontend && npx tsc --noEmit` 通过
-- **Notes**：
-  - Pattern：纯函数，无副作用
-  - Reference：常见的移动端 UA 检测正则
-  - Hook point：App.tsx 中使用决定渲染哪个组件
-
-##### WI-1.7 [S] 前端：App.tsx 设备路由 + MobileApp 占位
-- **描述**：修改 `App.tsx`，在顶层调用 `isMobile()` 判断设备类型。如果是手机则渲染 `MobileApp` 组件（暂时显示占位文本"Mobile View"），否则渲染原有桌面端内容
-- **验收标准**：
-  1. 手机浏览器访问显示 "Mobile View" 占位页面
-  2. 桌面浏览器访问显示原有 2×2 网格
-  3. 桌面端功能无任何影响
-  4. 安全门控：`cd frontend && npx tsc --noEmit` 通过
-- **Notes**：
-  - Pattern：条件渲染，顶层分流
-  - Reference：`frontend/src/App.tsx`
-  - Hook point：阶段 2 将填充 MobileApp 的实际内容
-
-##### WI-1.8 [S] 前端：api.ts 新增 mobile layout 函数
-- **描述**：在 `api.ts` 中新增 `MobileLayoutEntry` 接口和 `getMobileLayout()`、`updateMobileLayout()` 函数，对接后端 `/api/mobile-layout`
-- **验收标准**：
-  1. 接口类型定义正确（containerId, sortOrder）
-  2. GET/PUT 函数可正常调用
-  3. 安全门控：`cd frontend && npx tsc --noEmit` 通过
-- **Notes**：
-  - Pattern：参照现有 layout API 函数
-  - Reference：`frontend/src/api.ts`
-  - Hook point：MobileApp 中将使用这些函数
-
-##### WI-1.9 [S] 测试：前端构建检查 + 设备路由验证
-- **描述**：验证前端类型检查和构建通过，在手机浏览器（或 DevTools 模拟）中确认路由分流正确
-- **验收标准**：
-  1. Chrome DevTools 切换手机 UA 后显示移动端占位页面
-  2. 桌面 UA 显示原有网格布局
-  3. 安全门控：`cd frontend && npx tsc --noEmit` 通过
-  4. 安全门控：`cd frontend && npm run build` 通过
-
-##### WI-1.10 [集成门控] 阶段 1 完整验证
-- **描述**：验证后端 API + 前端设备路由 + 类型定义的端到端集成
-- **验收标准**：
-  1. 所有安全门控命令通过
-  2. 手机 UA 访问看到占位页面
-  3. 桌面 UA 访问功能不受影响
-  4. mobile layout API 可正常读写
+  2. `cd backend && go test ./...` 通过
+  3. `make build` 构建成功
+  4. `agent-hive init` 正确生成 config.yaml
+  5. `agent-hive run --config config.yaml` 正常启动，日志写入文件，PTY 用户切换正确
 
 **阶段验收标准**：
-1. Given 用户使用手机浏览器访问, When 页面加载完成, Then 显示移动端占位页面
-2. Given 用户使用桌面浏览器访问, When 页面加载完成, Then 显示原有 2×2 网格布局，无功能退化
-3. Given 创建一个新容器, When 查询 mobile layout API, Then 返回包含该容器的条目
-4. 所有安全门控命令通过
+1. Given 运行 `agent-hive`（无参数）, When 命令执行, Then 输出子命令帮助列表
+2. Given 运行 `agent-hive init`, When 当前目录无 config.yaml, Then 生成配置文件，user/shell 自动嗅探
+3. Given config.yaml 配置 user=penguin shell=/bin/zsh, When 以 root 运行 `agent-hive run`, Then PTY 以 penguin 用户运行 zsh
+4. Given 程序启动, When 有请求, Then 日志同时输出到 stdout 和 agent-hive.log
+5. 所有安全门控命令通过
 
-**阶段状态**：已完成
-
-**完成日期**：2026-04-14
-**验收结果**：通过
-**安全门控**：全部通过
-**集成门控**：全部通过
-**备注**：后端 mobile_layouts 表和 API 功能正常，前端设备检测路由分流就绪
+**阶段状态**：未开始
 
 ---
 
-### 阶段 2：移动端单项目视图
+### 阶段 3：服务管理
 
-**目标**：实现移动端完整的单项目视图，包含终端、待办事项、可拖拽分割线和项目管理操作
+**目标**：实现 systemd 服务安装/卸载/管理命令。
 
 **涉及的需求项**：
-- 2.2.1 单项目全屏视图
-- 2.2.2 终端与待办区域可拖拽分割
-- 2.5.1 移动端项目删除与重命名
+- 2.3.2 install 命令
+- 2.3.3 uninstall 命令
+- 2.3.4 start/stop/restart 命令
+- 2.3.5 status 命令
+- 2.3.6 logs 命令
 
 #### 工作项列表
 
-##### WI-2.1 [M] MobileApp 组件外壳
-- **描述**：实现 `MobileApp.tsx`，包含认证流程（复用 LoginPage）、数据加载（containers, mobile layout）、notify WebSocket 连接。暂时只显示第一个项目的名称
+##### WI-3.1 [M] install 命令
+- **描述**：实现 `internal/cli/install.go`。硬编码 systemd service 文件模板，使用 `text/template` 填充二进制路径（`os.Executable()`）和配置文件路径（`--config` 参数或默认同目录 config.yaml）。写入 `/etc/systemd/system/agent-hive.service`。执行 `systemctl daemon-reload` 和 `systemctl enable agent-hive`。检查 root 权限（`os.Getuid() != 0` 报错）。已存在时提示覆盖确认。检查 config 文件存在性。
 - **验收标准**：
-  1. 认证流程与桌面端一致（无密码跳过、有密码需登录）
-  2. 加载后正确获取容器列表和移动端布局数据
-  3. notify WebSocket 连接正常，收到 `containers-changed` 和 `todos-updated` 事件时刷新数据
-  4. 安全门控：`cd frontend && npx tsc --noEmit` 通过
+  1. 以 root 运行 `agent-hive install` 生成 service 文件并 enable
+  2. 非 root 运行给出权限错误提示
+  3. 服务已存在时提示覆盖确认
+  4. config 文件不存在时报错
+  5. 安全门控：`cd backend && go build ./...` 通过
 - **Notes**：
-  - Pattern：参照 App.tsx 的 auth + data loading 逻辑
-  - Reference：`frontend/src/App.tsx` 的 useEffect 和 connectNotifyWS
-  - Hook point：WI-2.3 将在此组件内渲染项目视图
+  - Pattern：`text/template` 渲染 service 文件，`exec.Command("systemctl", ...)` 执行命令
+  - Reference：阶段 2 的 CLI 框架
+  - Hook point：被 uninstall/start/stop 等命令依赖（需要已安装的服务）
 
-##### WI-2.2 [S] 测试：MobileApp 加载验证
-- **描述**：在手机浏览器中验证 MobileApp 认证和数据加载正常
+##### WI-3.2 [S] uninstall 命令
+- **描述**：实现 `internal/cli/uninstall.go`。执行 `systemctl stop`、`systemctl disable`、删除 service 文件、`daemon-reload`。检查 root 权限。检查 service 文件是否存在（未安装时提示）。
 - **验收标准**：
-  1. 手机端可正常登录
-  2. 登录后显示项目名称
-  3. 在其他设备创建容器后，手机端自动刷新
-  4. 安全门控：`cd frontend && npx tsc --noEmit` 通过
-
-##### WI-2.3 [M] MobileProjectView 组件
-- **描述**：新建 `MobileProjectView.tsx`，上方渲染 Terminal 组件，下方渲染 TodoList 组件，默认各占 50% 高度。复用现有的 Terminal 和 TodoList 组件
-- **验收标准**：
-  1. 终端在上，待办在下，占满可用高度
-  2. 终端可输入命令、查看输出
-  3. 待办可增删改查
-  4. 安全门控：`cd frontend && npx tsc --noEmit` 通过
+  1. 以 root 运行 `agent-hive uninstall` 完成停止、禁用、删除、reload
+  2. 服务未安装时提示
+  3. 非 root 给出权限错误
+  4. 安全门控：`cd backend && go build ./...` 通过
 - **Notes**：
-  - Pattern：flex 布局，通过百分比分配高度
-  - Reference：`frontend/src/components/Terminal.tsx`, `frontend/src/components/TodoList.tsx`
-  - Hook point：WI-2.5 将在此组件中加入分割线
+  - Pattern：顺序执行 systemctl 命令，忽略 stop 失败（可能已停止）
+  - Reference：`internal/cli/install.go` 的 root 检查逻辑
+  - Hook point：与 install 互为逆操作
 
-##### WI-2.4 [S] 测试：终端和待办在手机端可用
-- **描述**：在手机浏览器中验证终端输入输出和待办操作正常
+##### WI-3.3 [S] 测试 — 模板渲染 + 权限检查
+- **描述**：编写 Go 测试：(1) service 文件模板渲染（验证路径填充正确）；(2) root 权限检查逻辑；(3) service 文件存在性检查。不实际调用 systemctl。
 - **验收标准**：
-  1. 终端可触摸聚焦并通过虚拟键盘输入
-  2. 待办可添加、勾选、删除、拖拽排序
-  3. 多设备间终端和待办实时同步
-  4. 安全门控：`cd frontend && npx tsc --noEmit` 通过
-
-##### WI-2.5 [集成门控] 移动端基础视图可用
-- **描述**：验证 WI-2.1 ~ WI-2.4 的集成状态
-- **验收标准**：
-  1. 所有安全门控命令通过
-  2. 手机端完整认证 → 加载数据 → 显示项目终端和待办
-  3. 终端和待办功能正常
-
-##### WI-2.6 [M] ResizableSplitPane 可拖拽分割线
-- **描述**：新建 `ResizableSplitPane.tsx`，在终端和待办之间渲染一条可拖拽的分割条。使用 touch 事件实现拖拽，设置最小高度约束（各自一行内容高度，约 30px）。在 MobileProjectView 中使用
-- **验收标准**：
-  1. 分割线可上下拖拽，终端和待办高度实时跟随
-  2. 拖拽到极限位置时保留最小高度（约 30px）
-  3. 拖拽松手后区域高度固定不回弹
-  4. 切换项目后恢复默认 50/50 比例
-  5. 安全门控：`cd frontend && npx tsc --noEmit` 通过
+  1. `cd backend && go test ./internal/cli/...` 通过
+  2. 覆盖模板渲染、权限检查、存在性检查
+  3. 安全门控：`cd backend && go test ./...` 通过
 - **Notes**：
-  - Pattern：touchstart/touchmove/touchend 事件，计算 deltaY 更新上下区域比例
-  - Reference：无外部依赖
-  - Hook point：集成到 MobileProjectView 中
+  - Pattern：抽取 systemctl 调用为可注入接口，测试中使用 mock
+  - Reference：`internal/cli/install.go`、`internal/cli/uninstall.go`
+  - Hook point：CI 集成
 
-##### WI-2.7 [S] 测试：分割线拖拽验证
-- **描述**：在手机浏览器中验证分割线拖拽功能
+##### WI-3.4 [集成门控] install/uninstall 集成验证
+- **描述**：验证 WI-3.1 ~ WI-3.3 的集成状态。
 - **验收标准**：
-  1. 手指拖拽分割线流畅无卡顿
-  2. 最小高度约束生效
-  3. 拖拽分割线不会误触发终端输入或待办操作
-  4. 安全门控：`cd frontend && npx tsc --noEmit` 通过
+  1. `cd backend && go build ./...` 通过
+  2. `cd backend && go test ./...` 通过
+  3. `make build` 构建成功
+  4. 手动验证：install 生成 service 文件 → uninstall 清理
 
-##### WI-2.8 [M] 移动端标题栏（重命名、删除、排序箭头）
-- **描述**：在 MobileProjectView 顶部实现标题栏，包含：项目名称、重命名按钮、删除按钮、左右移动箭头（箭头功能在阶段 3 实现，此处先放置禁用状态的按钮）。删除后自动切换到相邻项目
+##### WI-3.5 [M] start/stop/restart/status/logs 命令
+- **描述**：实现 `internal/cli/service.go`。每个子命令封装对应的 systemctl/journalctl 调用。start/stop/restart 检查 root 权限。status 无需 root。logs 支持 `-f` 和 `-n` 参数，使用 `exec.Command` 并将 stdout/stderr 连接到当前终端（`cmd.Stdout = os.Stdout`）。
 - **验收标准**：
-  1. 标题栏显示项目名称
-  2. 点击重命名按钮弹出编辑框，修改后名称更新并多设备同步
-  3. 点击删除按钮关闭项目，视图切换到前一个项目
-  4. 删除唯一项目后显示新建项目页面
-  5. 左右箭头按钮已渲染但处于禁用状态
-  6. 安全门控：`cd frontend && npx tsc --noEmit` 通过
+  1. `agent-hive start/stop/restart` 正确调用 systemctl
+  2. `agent-hive status` 显示服务状态
+  3. `agent-hive logs` 输出日志，`-f` 可实时跟踪
+  4. start/stop/restart 非 root 给出权限错误
+  5. 安全门控：`cd backend && go build ./...` 通过
 - **Notes**：
-  - Pattern：参照桌面端 ProjectContainer 的 header 操作
-  - Reference：`frontend/src/components/ProjectContainer.tsx`
-  - Hook point：阶段 3 WI-3.6 将启用箭头功能
+  - Pattern：`exec.Command` + `cmd.Stdout/Stderr = os.Stdout/Stderr` 透传输出
+  - Reference：`internal/cli/install.go` 的 systemctl 调用模式
+  - Hook point：logs 的 `-f` 模式需要 `cmd.Run()`（阻塞直到用户 Ctrl+C）
 
-##### WI-2.9 [S] 测试：项目管理操作验证
-- **描述**：在手机浏览器中验证重命名和删除功能
+##### WI-3.6 [S] 测试 — service 命令
+- **描述**：编写 Go 测试：(1) start/stop/restart 的 root 权限检查；(2) status 无需 root 验证；(3) logs 参数解析（-f、-n）。不实际调用 systemctl。
 - **验收标准**：
-  1. 重命名后其他设备同步更新
-  2. 删除后视图正确切换
-  3. 删除唯一项目后显示新建页面
-  4. 安全门控：`cd frontend && npx tsc --noEmit` 通过
+  1. `cd backend && go test ./internal/cli/...` 通过
+  2. 覆盖权限检查和参数解析
+  3. 安全门控：`cd backend && go test ./...` 通过
+- **Notes**：
+  - Pattern：mock systemctl 调用接口
+  - Reference：`internal/cli/service.go`
+  - Hook point：CI 集成
 
-##### WI-2.10 [集成门控] 阶段 2 完整验证
-- **描述**：验证移动端单项目视图的完整功能
+##### WI-3.7 [集成门控] 阶段 3 完整集成验证
+- **描述**：验证阶段 3 所有工作项的集成状态。
 - **验收标准**：
-  1. 所有安全门控命令通过
-  2. 终端 + 待办 + 分割线 + 标题栏全部可用
-  3. 多设备同步正常
+  1. `cd backend && go build ./...` 通过
+  2. `cd backend && go test ./...` 通过
+  3. `make build` 构建成功
+  4. 手动验证完整生命周期：init → install → start → status → restart → logs → stop → uninstall
 
 **阶段验收标准**：
-1. Given 用户在手机端打开页面, When 页面加载完成, Then 显示第一个项目，终端在上、待办在下
-2. Given 用户拖拽分割线, When 上下拖拽, Then 终端和待办区域高度实时变化，最小高度约束生效
-3. Given 用户点击重命名按钮, When 输入新名称确认, Then 名称更新且多设备同步
-4. Given 用户点击删除按钮, When 项目被删除, Then 视图切换到相邻项目
-5. 所有安全门控命令通过
+1. Given 以 root 运行 `agent-hive install`, When 命令执行, Then service 文件被创建并 enable
+2. Given 服务已安装, When 运行 `agent-hive start`, Then 服务启动，status 显示 active
+3. Given 服务运行中, When 运行 `agent-hive logs -f`, Then 实时输出日志
+4. Given 服务已安装, When 运行 `agent-hive uninstall`, Then 服务停止、service 文件删除
+5. Given 非 root 运行 install/start/stop, When 命令执行, Then 给出权限错误提示
+6. 所有安全门控命令通过
 
-**阶段状态**：已完成
-
-**完成日期**：2026-04-14
-**验收结果**：通过
-**安全门控**：全部通过
-**集成门控**：全部通过
-**备注**：分割线和标题栏内联到 MobileProjectView 中实现，避免不必要的组件拆分
+**阶段状态**：未开始
 
 ---
 
-### 阶段 3：滑动导航 + 布局持久化
+### 阶段 4：移动端快捷键栏
 
-**目标**：实现 Swiper 滑动切换项目、新建入口、排序功能和移动端布局持久化
+**目标**：移动端添加快捷键栏和粘贴功能。
 
 **涉及的需求项**：
-- 2.3.1 左右滑动切换项目
-- 2.4.1 左右按键移动项目位置
-- 2.6.1 末尾新建项目页面
-- 2.7.1 手机端布局独立存储（前端集成）
+- 2.5.1 快捷键按钮栏
+- 2.5.2 粘贴按钮
 
 #### 工作项列表
 
-##### WI-3.1 [M] Swiper 集成 + 项目滑动切换
-- **描述**：安装 swiper 包，在 MobileApp 中用 Swiper 组件包裹项目列表。每个 SwiperSlide 渲染一个 MobileProjectView。配置 `touchAngle: 45` 解决手势冲突
+##### WI-4.1 [M] 快捷键按钮栏组件
+- **描述**：新建 `frontend/src/components/ShortcutBar.tsx`。固定在终端底部，包含按钮：`^C`（`\x03`）、`^L`（`\x0c`）、`Tab`（`\t`）、`Esc`（`\x1b`）、`↑`（`\x1b[A`）、`↓`（`\x1b[B`）、`←`（`\x1b[D`）、`→`（`\x1b[C`）、粘贴按钮。栏容器 `overflow-x-auto` 实现水平滚动，`touch-action: pan-x` 阻止事件冒泡到 Swiper。接收 `onSend: (data: string) => void` 回调。在 `MobileProjectView.tsx` 中集成到终端区域底部。
 - **验收标准**：
-  1. 左右滑动可流畅切换项目
-  2. 偏垂直方向的滑动不触发切换，终端内可正常上下滚动
-  3. 第一个项目向右滑动有弹性回弹
+  1. 移动端终端底部显示快捷键栏
+  2. 点击各按钮发送正确的控制字符
+  3. 快捷键栏可水平滑动，不触发 Swiper 页面切换
   4. 安全门控：`cd frontend && npx tsc --noEmit` 通过
 - **Notes**：
-  - Pattern：Swiper React 组件，`touchAngle: 45` 配置
-  - Reference：Swiper.js 官方文档
-  - Hook point：WI-3.3 将在末尾添加新建页面
+  - Pattern：按钮数组 `{label, value}` 映射，`onTouchStart` 中 `e.stopPropagation()` 隔离 Swiper
+  - Reference：`frontend/src/components/MobileProjectView.tsx` 中 Terminal 和 TodoList 的布局
+  - Hook point：通过 Terminal 组件暴露的 WebSocket 发送数据，或通过 `term.onData` 回调
 
-##### WI-3.2 [S] 测试：滑动切换验证
-- **描述**：在手机浏览器中测试滑动切换的流畅度和手势冲突
+##### WI-4.2 [S] 粘贴弹窗组件
+- **描述**：新建 `frontend/src/components/PasteModal.tsx`。点击快捷键栏的粘贴按钮弹出 modal。包含 `<textarea>` 输入框（支持多行粘贴）、确认和取消按钮。确认时将内容通过 `onSend` 发送到终端，清空并关闭。取消或点击遮罩层关闭。空内容点确认直接关闭。
 - **验收标准**：
-  1. 滑动动画流畅（60fps）
-  2. 终端区域垂直滑动不触发项目切换
-  3. 不同浏览器（Safari, Chrome）下表现一致
-  4. 安全门控：`cd frontend && npx tsc --noEmit` 通过
-
-##### WI-3.3 [S] 末尾新建项目页面
-- **描述**：在 Swiper 最后一个 slide 中添加新建项目入口（虚线框按钮），点击后创建项目并将 Swiper 滑动到新项目
-- **验收标准**：
-  1. 最后一页显示新建项目入口
-  2. 点击后创建项目，Swiper 自动滑到新项目
-  3. 创建失败时显示错误提示，保持在新建页面
-  4. 安全门控：`cd frontend && npx tsc --noEmit` 通过
-- **Notes**：
-  - Pattern：复用 NewProjectSlot 的样式
-  - Reference：`frontend/src/components/NewProjectSlot.tsx`
-  - Hook point：创建后需同步更新 mobile layout
-
-##### WI-3.4 [S] 测试：新建项目验证
-- **描述**：在手机端创建项目并验证跳转
-- **验收标准**：
-  1. 滑到末尾可见新建入口
-  2. 创建后自动跳转到新项目
-  3. 其他设备同步看到新容器
-  4. 安全门控：`cd frontend && npx tsc --noEmit` 通过
-
-##### WI-3.5 [集成门控] 滑动导航 + 新建功能完整
-- **描述**：验证 WI-3.1 ~ WI-3.4 的集成状态
-- **验收标准**：
-  1. 所有安全门控命令通过
-  2. 滑动切换、手势冲突处理、新建入口全部正常
-  3. 多设备同步正常
-
-##### WI-3.6 [M] 左右箭头移动项目顺序
-- **描述**：启用标题栏的左右箭头按钮，点击后将当前项目在移动端布局中前移/后移一位。第一个项目禁用左箭头，最后一个项目禁用右箭头。移动后 Swiper 跟随
-- **验收标准**：
-  1. 点击左箭头，项目前移一位，Swiper 跟随到该项目
-  2. 点击右箭头，项目后移一位，Swiper 跟随到该项目
-  3. 边界位置箭头禁用
-  4. 排序变更同步到后端 mobile layout
+  1. 点击粘贴按钮弹出弹窗
+  2. 粘贴文本并确认，内容发送到终端
+  3. 取消或点击外部关闭弹窗
+  4. 空内容确认不发送，直接关闭
   5. 安全门控：`cd frontend && npx tsc --noEmit` 通过
 - **Notes**：
-  - Pattern：交换相邻条目的 sortOrder，调用 updateMobileLayout
-  - Reference：`frontend/src/api.ts` updateMobileLayout
-  - Hook point：排序变更需持久化到后端
+  - Pattern：React portal 或 absolute 定位 modal，`autoFocus` 让 textarea 自动聚焦方便粘贴
+  - Reference：无现有 modal 组件，新建
+  - Hook point：被 ShortcutBar 中的粘贴按钮触发
 
-##### WI-3.7 [S] 移动端布局持久化集成
-- **描述**：MobileApp 启动时从后端加载 mobile layout 确定项目顺序，排序变更后实时保存到后端。确保关闭浏览器重新打开后顺序恢复
+##### WI-4.3 [S] Terminal 组件适配 — 暴露发送接口
+- **描述**：修改 `Terminal.tsx`，通过 `useImperativeHandle` + `forwardRef` 暴露 `sendData(data: string)` 方法，内部调用 `ws.send(new TextEncoder().encode(data))`。MobileProjectView 通过 ref 获取此方法，传给 ShortcutBar 的 `onSend`。
 - **验收标准**：
-  1. 启动时按 mobile layout 的 sortOrder 排列项目
-  2. 移动项目顺序后，刷新页面顺序不变
-  3. 不同手机访问看到相同的排列顺序
+  1. Terminal 暴露 `sendData` 方法
+  2. 快捷键栏和粘贴弹窗通过此方法发送数据到终端
+  3. 桌面端 Terminal 不受影响
   4. 安全门控：`cd frontend && npx tsc --noEmit` 通过
 - **Notes**：
-  - Pattern：loadData 时 merge containers + mobile layout → sorted list
-  - Reference：App.tsx 中桌面端 layout 的加载逻辑
-  - Hook point：与 WI-3.6 的排序操作协同
+  - Pattern：`React.forwardRef` + `useImperativeHandle`
+  - Reference：`frontend/src/components/Terminal.tsx:94-98` 的 `onData` 和 ws.send
+  - Hook point：被 MobileProjectView 使用
 
-##### WI-3.8 [S] 测试：布局持久化验证
-- **描述**：验证移动端布局在刷新、关闭重开、多手机间的一致性
+##### WI-4.4 [集成门控] 快捷键栏 + 粘贴集成验证
+- **描述**：验证 WI-4.1 ~ WI-4.3 的集成状态。
 - **验收标准**：
-  1. 调整顺序后刷新页面，顺序不变
-  2. 手机 A 调整顺序后，手机 B 看到相同顺序
-  3. 手机调整不影响桌面端布局
-  4. 安全门控：`cd frontend && npx tsc --noEmit` 通过
+  1. `cd frontend && npx tsc --noEmit` 通过
+  2. 移动端快捷键栏和粘贴弹窗正常工作
+  3. 快捷键栏水平滑动不影响 Swiper
+  4. 桌面端不显示快捷键栏
 
-##### WI-3.9 [集成门控] 阶段 3 完整验证
-- **描述**：全功能 E2E 验证
+##### WI-4.5 [S] 阶段 4 前端测试
+- **描述**：编写 Vitest 测试：(1) ShortcutBar 各按钮点击触发正确的 onSend 值；(2) PasteModal 确认/取消/空内容行为。
 - **验收标准**：
-  1. 所有安全门控命令通过
-  2. `cd frontend && npm run build` 通过
-  3. 滑动切换、新建项目、排序、持久化全部正常
-  4. 多设备同步正常
-  5. 桌面端无功能退化
+  1. `cd frontend && npx vitest run` 通过
+  2. 覆盖所有快捷键映射和粘贴弹窗行为
+  3. 安全门控：`cd frontend && npx vitest run` 通过
+- **Notes**：
+  - Pattern：`@testing-library/react` 模拟点击和输入
+  - Reference：WI-1.3 的 Vitest 配置
+  - Hook point：CI 集成
+
+##### WI-4.6 [集成门控] 阶段 4 完整集成验证
+- **描述**：验证阶段 4 所有工作项的集成状态。
+- **验收标准**：
+  1. `cd frontend && npx tsc --noEmit` 通过
+  2. `cd frontend && npx vitest run` 通过
+  3. `make build` 构建成功
+  4. 手机浏览器验证：快捷键栏各按钮功能正常，粘贴弹窗正常，Swiper 不受干扰
 
 **阶段验收标准**：
-1. Given 用户在手机端有 3 个项目, When 左右滑动, Then 流畅切换项目，终端区域垂直滑动不误触发
-2. Given 用户滑到最后一页, When 点击新建按钮, Then 创建项目并自动跳转
-3. Given 用户点击左箭头, When 项目移动后刷新页面, Then 顺序已持久化
-4. Given 用户在手机端调整了顺序, When 在桌面端访问, Then 桌面端布局不受影响
-5. 所有安全门控命令通过
+1. Given 移动端打开项目, When 页面加载, Then 终端底部显示快捷键栏
+2. Given 终端运行 `cat`, When 点击 ^C 按钮, Then 进程被中断
+3. Given 终端运行 shell, When 点击 Tab 按钮, Then 触发自动补全
+4. Given 快捷键栏, When 水平滑动, Then 栏内容滚动，不切换 Swiper 页面
+5. Given 点击粘贴按钮, When 输入文本并确认, Then 文本发送到终端
+6. Given 粘贴弹窗, When 空内容点确认, Then 弹窗关闭，不发送
+7. 所有安全门控命令通过
 
-**阶段状态**：已完成
+**阶段状态**：未开始
 
-**完成日期**：2026-04-14
-**验收结果**：通过
-**安全门控**：全部通过
-**集成门控**：全部通过
-**备注**：Swiper 集成、新建入口、排序箭头、布局持久化一并在 MobileApp 中实现。修复了 swiper/css 类型声明问题。
+---
 
 ## 3. 风险与应对
 
 | 风险 | 影响 | 概率 | 应对措施 |
 |------|------|------|----------|
-| Swiper 与 xterm.js 触摸事件冲突 | 终端区域无法正常滚动或输入 | 中 | 利用 `touchAngle: 45` 配置；必要时对终端区域设置 `noSwiping` class |
-| iOS Safari 虚拟键盘弹出导致布局变化 | 分割线位置错乱、终端尺寸异常 | 中 | 使用 `visualViewport` API 监听键盘弹出，动态调整布局高度 |
-| 分割线拖拽与 Swiper 水平滑动冲突 | 拖拽分割线时误触发项目切换 | 低 | 分割线 touch 事件中调用 `e.stopPropagation()` 阻止冒泡 |
-| 不同浏览器 UA 格式差异导致误判 | 平板被识别为手机或反之 | 低 | 采用成熟的 UA 匹配正则，覆盖主流设备 |
+| PTY setuid 需要 root 权限，开发环境无法测试 | 用户切换功能无法在开发机验证 | 中 | 非 root 时跳过 setuid，仅 root 时生效；测试中 mock Credential 设置 |
+| 快捷键栏水平滑动与 Swiper 页面切换冲突 | 快捷键栏滑动误触发页面切换 | 中 | `e.stopPropagation()` + `touch-action: pan-x` 隔离事件；Swiper `touchAngle: 45` 已有角度限制 |
+| systemctl 命令在 CI/容器环境不可用 | 服务管理命令无法自动化测试 | 高 | 抽取 systemctl 调用为接口，测试中 mock；手动验证实际 systemd 集成 |
+| 日志轮转在跨天边界的并发写入 | 轮转期间日志丢失 | 低 | mutex 保护轮转操作，确保原子性 |
 
 ## 4. 开发规范
 
 ### 4.1 代码规范
-- 沿用现有项目的 TypeScript + Tailwind 风格
-- 移动端组件以 `Mobile` 前缀命名，与桌面端组件区分
-- 新组件放在 `frontend/src/components/` 目录下
+- Go：遵循 Go 官方代码风格，`gofmt` 格式化
+- TypeScript：遵循项目 ESLint 配置
+- CSS：使用 Tailwind utility classes，避免自定义 CSS
 
 ### 4.2 Git 规范
-- 在 `feature/mobile-adaptation` 分支上开发
+- 在 main 分支上开发
 - 提交信息使用中文
-- 每个工作项完成后提交一次
+- 每个工作项完成后提交，粒度与工作项对齐
 
 ### 4.3 文档规范
-- 代码中仅在非显而易见的逻辑处添加注释
-- 不新增文档文件，README 在最终合并前更新
+- 代码注释仅在逻辑不自明时添加
+- 不添加额外 README 或文档文件
 
 ## 5. 工作项统计
 
 | 阶段 | S | M | 集成门控 | 总计 |
 |------|---|---|---------|------|
-| 阶段 1 | 8 | 0 | 2 | 10 |
-| 阶段 2 | 4 | 4 | 2 | 10 |
-| 阶段 3 | 4 | 2 | 3 | 9 |
-| **合计** | **16** | **6** | **7** | **29** |
+| 阶段 1：前端体验优化 | 2 | 1 | 1 | 4 |
+| 阶段 2：后端基础设施 | 4 | 3 | 1 | 8 |
+| 阶段 3：服务管理 | 3 | 2 | 2 | 7 |
+| 阶段 4：移动端快捷键栏 | 3 | 1 | 2 | 6 |
+| **合计** | **12** | **7** | **6** | **25** |
 
 ## 审核记录
 
 | 日期 | 审核人 | 评分 | 结果 | 备注 |
 |------|--------|------|------|------|
-| 2026-04-14 | AI Assistant | 84/100 | 未通过 | 初审：WI-3.5 编号重复、统计表有误、测试 WI 缺少安全门控 |
-| 2026-04-14 | AI Assistant | 93/100 | 通过 | 复审：修复编号、更正统计、补齐安全门控命令 |
+| 2026-04-16 | AI Assistant | 92/100 | 通过 | 测试交织改进：拆分测试项紧跟功能，WI-3.3 改为 M，阶段 3 增加 1 项 |

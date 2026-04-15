@@ -157,10 +157,10 @@ function SortableTodoItem({ todo, onToggle, onEdit, onDelete }: SortableTodoItem
     <div
       ref={setNodeRef}
       style={style}
-      className="flex items-center gap-1 px-1.5 py-1 border-b border-gray-800/50 group hover:bg-gray-800/30"
+      className="flex items-start gap-1 px-1.5 py-1 border-b border-gray-800/50 group hover:bg-gray-800/30"
     >
       <button
-        className="text-gray-700 hover:text-gray-500 cursor-grab active:cursor-grabbing p-0.5 shrink-0"
+        className="text-gray-700 hover:text-gray-500 cursor-grab active:cursor-grabbing p-0.5 shrink-0 mt-0.5"
         {...attributes}
         {...listeners}
       >
@@ -169,7 +169,7 @@ function SortableTodoItem({ todo, onToggle, onEdit, onDelete }: SortableTodoItem
 
       <button
         onClick={() => onToggle(todo)}
-        className={`w-3 h-3 rounded-sm border shrink-0 flex items-center justify-center transition-colors ${
+        className={`w-3 h-3 rounded-sm border shrink-0 flex items-center justify-center transition-colors mt-0.5 ${
           todo.done ? 'bg-emerald-600 border-emerald-600' : 'border-gray-600 hover:border-gray-400'
         }`}
       >
@@ -194,7 +194,7 @@ function SortableTodoItem({ todo, onToggle, onEdit, onDelete }: SortableTodoItem
       ) : (
         <span
           onDoubleClick={() => setEditing(true)}
-          className={`flex-1 min-w-0 truncate cursor-default select-none ${
+          className={`flex-1 min-w-0 break-all cursor-default select-none ${
             todo.done ? 'text-gray-600 line-through' : 'text-gray-300'
           }`}
         >

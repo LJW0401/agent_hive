@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { X, Pencil, Check, ArrowLeft, ArrowRight } from 'lucide-react'
 import Terminal from './Terminal'
 import TodoList from './TodoList'
@@ -16,10 +16,16 @@ interface ProjectContainerProps {
   dragHandleProps?: Record<string, unknown>
 }
 
+const MAX_TODO_RATIO = 2 / 3
+const DEFAULT_TODO_RATIO = 0.25 // ~w-48 equivalent on a typical container
+
 export default function ProjectContainer({ container, onClose, onRename, onStatusChange, todoRefreshKey, currentPage, totalPages, onMoveToPage, dragHandleProps }: ProjectContainerProps) {
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(container.name)
+  const [todoRatio, setTodoRatio] = useState(DEFAULT_TODO_RATIO)
   const inputRef = useRef<HTMLInputElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const draggingRef = useRef(false)
 
   useEffect(() => {
     if (editing) {
@@ -37,6 +43,30 @@ export default function ProjectContainer({ container, onClose, onRename, onStatu
     }
     setEditing(false)
   }
+
+  const handleSplitMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    draggingRef.current = true
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!draggingRef.current || !bodyRef.current) return
+      const rect = bodyRef.current.getBoundingClientRect()
+      const x = ev.clientX - rect.left
+      const ratio = x / rect.width
+      setTodoRatio(Math.min(MAX_TODO_RATIO, Math.max(0, ratio)))
+    }
+
+    const onMouseUp = () => {
+      draggingRef.current = false
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+    }
+
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }, [])
+
+  const todoHidden = todoRatio < 0.02
 
   return (
     <div className="flex flex-col h-full rounded-lg border border-gray-800 bg-[#111114] overflow-hidden">
@@ -99,11 +129,23 @@ export default function ProjectContainer({ container, onClose, onRename, onStatu
         </div>
       </div>
 
-      {/* Body: todo list + terminal */}
-      <div className="flex flex-1 min-h-0">
+      {/* Body: todo list + splitter + terminal */}
+      <div ref={bodyRef} className="flex flex-1 min-h-0">
         {/* Left: Todo area */}
-        <div className="w-48 shrink-0 border-r border-gray-800 hidden lg:flex flex-col">
-          <TodoList containerID={container.id} refreshKey={todoRefreshKey} />
+        {!todoHidden && (
+          <div
+            className="shrink-0 border-r border-gray-800 hidden lg:flex flex-col overflow-hidden"
+            style={{ width: `${todoRatio * 100}%` }}
+          >
+            <TodoList containerID={container.id} refreshKey={todoRefreshKey} />
+          </div>
+        )}
+        {/* Splitter */}
+        <div
+          className="w-1 shrink-0 hidden lg:flex items-center justify-center cursor-col-resize hover:bg-gray-700/50 active:bg-gray-600/50 transition-colors"
+          onMouseDown={handleSplitMouseDown}
+        >
+          <div className="w-0.5 h-8 rounded-full bg-gray-700" />
         </div>
         {/* Right: Terminal */}
         <div className="flex-1 min-w-0 min-h-0">
