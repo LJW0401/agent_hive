@@ -379,7 +379,12 @@ frontend/src/
 5. Given 非 root 运行 install/start/stop, When 命令执行, Then 给出权限错误提示
 6. 所有安全门控命令通过
 
-**阶段状态**：未开始
+**阶段状态**：已完成
+**完成日期**：2026-04-16
+**验收结果**：通过
+**安全门控**：全部通过
+**集成门控**：全部通过
+**备注**：install/uninstall/start/stop/restart/status/logs 全部实现
 
 ---
 
