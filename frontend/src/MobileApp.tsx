@@ -92,6 +92,12 @@ export default function MobileApp() {
     return sorted
   })()
 
+  const buildLayoutEntries = (orderedContainers: Container[]): MobileLayoutEntry[] =>
+    orderedContainers.map((container, index) => ({
+      containerId: container.id,
+      sortOrder: index,
+    }))
+
   // Apply pending slide after data updates (find by container ID)
   useEffect(() => {
     if (pendingSlideIdRef.current && swiperRef.current) {
@@ -124,9 +130,7 @@ export default function MobileApp() {
   const handleClose = useCallback(async (id: string) => {
     const currentSlide = swiperRef.current?.activeIndex ?? 0
     await deleteContainer(id)
-    const newLayout = mobileLayout
-      .filter((e) => e.containerId !== id)
-      .map((e, i) => ({ ...e, sortOrder: i }))
+    const newLayout = buildLayoutEntries(sortedContainers.filter((c) => c.id !== id))
     setMobileLayout(newLayout)
     await updateMobileLayout(newLayout)
     loadData()
@@ -135,7 +139,7 @@ export default function MobileApp() {
       const target = Math.min(currentSlide, newLayout.length - 1)
       swiperRef.current?.slideTo(Math.max(0, target))
     }, 100)
-  }, [mobileLayout, loadData])
+  }, [sortedContainers, loadData])
 
   const handleRename = useCallback(async (id: string, name: string) => {
     await renameContainer(id, name)
@@ -152,31 +156,31 @@ export default function MobileApp() {
 
   const handleMoveLeft = useCallback(async (index: number) => {
     if (index <= 0) return
-    const newLayout = [...mobileLayout].sort((a, b) => a.sortOrder - b.sortOrder)
+    const reordered = [...sortedContainers]
     // Swap with previous
-    const temp = newLayout[index]
-    newLayout[index] = newLayout[index - 1]
-    newLayout[index - 1] = temp
-    const reindexed = newLayout.map((e, i) => ({ ...e, sortOrder: i }))
-    setMobileLayout(reindexed)
-    await updateMobileLayout(reindexed)
+    const temp = reordered[index]
+    reordered[index] = reordered[index - 1]
+    reordered[index - 1] = temp
+    const newLayout = buildLayoutEntries(reordered)
+    setMobileLayout(newLayout)
+    await updateMobileLayout(newLayout)
     loadData()
     setTimeout(() => swiperRef.current?.slideTo(index - 1), 100)
-  }, [mobileLayout, loadData])
+  }, [sortedContainers, loadData])
 
   const handleMoveRight = useCallback(async (index: number) => {
-    const sorted = [...mobileLayout].sort((a, b) => a.sortOrder - b.sortOrder)
-    if (index >= sorted.length - 1) return
+    if (index >= sortedContainers.length - 1) return
+    const reordered = [...sortedContainers]
     // Swap with next
-    const temp = sorted[index]
-    sorted[index] = sorted[index + 1]
-    sorted[index + 1] = temp
-    const reindexed = sorted.map((e, i) => ({ ...e, sortOrder: i }))
-    setMobileLayout(reindexed)
-    await updateMobileLayout(reindexed)
+    const temp = reordered[index]
+    reordered[index] = reordered[index + 1]
+    reordered[index + 1] = temp
+    const newLayout = buildLayoutEntries(reordered)
+    setMobileLayout(newLayout)
+    await updateMobileLayout(newLayout)
     loadData()
     setTimeout(() => swiperRef.current?.slideTo(index + 1), 100)
-  }, [mobileLayout, loadData])
+  }, [sortedContainers, loadData])
 
   if (authState === 'loading') {
     return (
