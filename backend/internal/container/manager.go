@@ -12,6 +12,8 @@ import (
 	ptypkg "github.com/penguin/agent-hive/internal/pty"
 )
 
+const historyReplayLineLimit = 500
+
 // Listener receives PTY output and disconnect events via buffered channel.
 type Listener struct {
 	ch   chan []byte
@@ -334,9 +336,62 @@ func (m *Manager) Rename(id, name string) bool {
 	return true
 }
 
-// ReadHistory reads the full terminal output log for a container.
+// ReadHistory reads only the tail of the terminal output log so reconnects stay fast.
 func (m *Manager) ReadHistory(id string) ([]byte, error) {
-	return os.ReadFile(m.terminalLogPath(id))
+	f, err := os.Open(m.terminalLogPath(id))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	size := info.Size()
+	if size == 0 {
+		return nil, nil
+	}
+
+	var start int64
+	buf := make([]byte, 4096)
+	newlines := 0
+	offset := size
+
+	for offset > 0 && newlines <= historyReplayLineLimit {
+		chunkSize := int64(len(buf))
+		if offset < chunkSize {
+			chunkSize = offset
+		}
+		offset -= chunkSize
+
+		n, err := f.ReadAt(buf[:chunkSize], offset)
+		if err != nil && err != io.EOF {
+			return nil, err
+		}
+
+		for i := n - 1; i >= 0; i-- {
+			if buf[i] != '\n' {
+				continue
+			}
+			newlines++
+			if newlines > historyReplayLineLimit {
+				start = offset + int64(i) + 1
+				break
+			}
+		}
+	}
+
+	if start == 0 && newlines <= historyReplayLineLimit {
+		start = 0
+	}
+
+	history := make([]byte, size-start)
+	if _, err := f.ReadAt(history, start); err != nil && err != io.EOF {
+		return nil, err
+	}
+	return history, nil
 }
 
 // WriteToPTY writes data to the PTY session.
