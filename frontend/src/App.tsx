@@ -1,3 +1,5 @@
+import { isMobile } from './utils/device'
+import MobileApp from './MobileApp'
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -65,6 +67,11 @@ function compactLayout(entries: LayoutEntry[]): LayoutEntry[] {
 }
 
 export default function App() {
+  if (isMobile()) return <MobileApp />
+  return <DesktopApp />
+}
+
+function DesktopApp() {
   const [authState, setAuthState] = useState<'loading' | 'login' | 'ready'>('loading')
   const [containers, setContainers] = useState<Container[]>([])
   const [layout, setLayout] = useState<LayoutEntry[]>([])

@@ -94,6 +94,26 @@ export async function updateLayout(entries: LayoutEntry[]): Promise<void> {
   })
 }
 
+// --- Mobile Layout API ---
+
+export interface MobileLayoutEntry {
+  containerId: string
+  sortOrder: number
+}
+
+export async function getMobileLayout(): Promise<MobileLayoutEntry[]> {
+  const res = await fetch('/api/mobile-layout', { headers: authHeaders() })
+  return res.json()
+}
+
+export async function updateMobileLayout(entries: MobileLayoutEntry[]): Promise<void> {
+  await fetch('/api/mobile-layout', {
+    method: 'PUT',
+    headers: authHeaders(),
+    body: JSON.stringify(entries),
+  })
+}
+
 // --- Todo API ---
 
 export interface Todo {

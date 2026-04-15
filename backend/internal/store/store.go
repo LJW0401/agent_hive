@@ -61,6 +61,11 @@ func migrate(db *sql.DB) error {
 			page         INTEGER NOT NULL DEFAULT 0,
 			position     INTEGER NOT NULL DEFAULT 0
 		);
+
+		CREATE TABLE IF NOT EXISTS mobile_layouts (
+			container_id TEXT PRIMARY KEY,
+			sort_order   INTEGER NOT NULL DEFAULT 0
+		);
 	`)
 	return err
 }
