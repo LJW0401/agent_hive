@@ -14,6 +14,7 @@ const shortcuts = [
   { label: '↓', value: '\x1b[B' },
   { label: '←', value: '\x1b[D' },
   { label: '→', value: '\x1b[C' },
+  { label: 'Enter', value: '\r' },
 ]
 
 export default function ShortcutBar({ onSend }: ShortcutBarProps) {

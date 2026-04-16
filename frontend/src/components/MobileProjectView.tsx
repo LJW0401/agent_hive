@@ -37,7 +37,7 @@ export default function MobileProjectView({
   const [name, setName] = useState(container.name)
   const inputRef = useRef<HTMLInputElement>(null)
   const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map())
-  const [splitRatio, setSplitRatio] = useState(0.5)
+  const [splitRatio, setSplitRatio] = useState(0.7) // 7/3 default: terminal 70%, todo 30%
   const splitContainerRef = useRef<HTMLDivElement>(null)
   const draggingRef = useRef(false)
 
@@ -124,7 +124,9 @@ export default function MobileProjectView({
   }
 
   // Split pane touch handlers
-  const MIN_PX = 30
+  // Terminal min 40%, todo min 15%
+  const MIN_TERMINAL_RATIO = 0.40
+  const MAX_TERMINAL_RATIO = 0.85 // 1 - 0.15
 
   const handleTouchStart = (e: React.TouchEvent) => {
     e.stopPropagation()
@@ -136,10 +138,8 @@ export default function MobileProjectView({
     e.stopPropagation()
     const rect = splitContainerRef.current.getBoundingClientRect()
     const y = e.touches[0].clientY - rect.top
-    const totalHeight = rect.height
-    const minRatio = MIN_PX / totalHeight
-    const maxRatio = 1 - MIN_PX / totalHeight
-    setSplitRatio(Math.min(maxRatio, Math.max(minRatio, y / totalHeight)))
+    const ratio = y / rect.height
+    setSplitRatio(Math.min(MAX_TERMINAL_RATIO, Math.max(MIN_TERMINAL_RATIO, ratio)))
   }
 
   const handleTouchEnd = () => {
