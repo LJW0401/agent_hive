@@ -10,6 +10,47 @@ import (
 	"strings"
 )
 
+// textExts maps file extensions to whether they are text (true) or binary (false).
+var textExts = map[string]bool{
+	".go": true, ".js": true, ".jsx": true, ".ts": true, ".tsx": true,
+	".py": true, ".rb": true, ".rs": true, ".java": true, ".c": true,
+	".cpp": true, ".h": true, ".hpp": true, ".cs": true, ".swift": true,
+	".kt": true, ".scala": true, ".php": true, ".lua": true, ".sh": true,
+	".bash": true, ".zsh": true, ".fish": true, ".ps1": true, ".bat": true,
+	".cmd": true, ".sql": true, ".html": true, ".htm": true, ".css": true,
+	".scss": true, ".sass": true, ".less": true, ".xml": true, ".json": true,
+	".yaml": true, ".yml": true, ".toml": true, ".ini": true, ".cfg": true,
+	".conf": true, ".env": true, ".txt": true, ".log": true, ".csv": true,
+	".tsv": true, ".graphql": true, ".gql": true, ".proto": true,
+	".dockerfile": true, ".gitignore": true, ".editorconfig": true,
+	".makefile": true, ".cmake": true, ".gradle": true, ".tf": true,
+	".hcl": true, ".r": true, ".m": true, ".mm": true, ".vue": true,
+	".svelte": true, ".astro": true, ".zig": true, ".nim": true,
+	".dart": true, ".ex": true, ".exs": true, ".erl": true, ".hs": true,
+	".ml": true, ".clj": true, ".lisp": true, ".el": true, ".v": true,
+	".wasm": false, // binary
+}
+
+// langMap maps file extensions to Shiki language identifiers.
+var langMap = map[string]string{
+	".go": "go", ".js": "javascript", ".jsx": "jsx", ".ts": "typescript",
+	".tsx": "tsx", ".py": "python", ".rb": "ruby", ".rs": "rust",
+	".java": "java", ".c": "c", ".cpp": "cpp", ".h": "c", ".hpp": "cpp",
+	".cs": "csharp", ".swift": "swift", ".kt": "kotlin", ".scala": "scala",
+	".php": "php", ".lua": "lua", ".sh": "bash", ".bash": "bash",
+	".zsh": "bash", ".fish": "fish", ".ps1": "powershell",
+	".sql": "sql", ".html": "html", ".htm": "html", ".css": "css",
+	".scss": "scss", ".sass": "sass", ".less": "less",
+	".xml": "xml", ".json": "json", ".yaml": "yaml", ".yml": "yaml",
+	".toml": "toml", ".ini": "ini", ".graphql": "graphql",
+	".proto": "protobuf", ".dockerfile": "dockerfile",
+	".vue": "vue", ".svelte": "svelte", ".md": "markdown",
+	".r": "r", ".dart": "dart", ".ex": "elixir", ".exs": "elixir",
+	".erl": "erlang", ".hs": "haskell", ".ml": "ocaml",
+	".clj": "clojure", ".zig": "zig", ".nim": "nim",
+	".tf": "hcl", ".hcl": "hcl",
+}
+
 // SafeJoin joins base and rel, ensuring the result stays within base.
 // It prevents path traversal via "..", absolute paths, and symlinks.
 func SafeJoin(base, rel string) (string, error) {
@@ -86,6 +127,10 @@ func IsBinary(path string) (bool, error) {
 	return false, nil
 }
 
+// maxReadBytes is the maximum bytes to read from large files.
+// Files larger than this are read from the tail only.
+const maxReadBytes int64 = 10 * 1024 * 1024
+
 // ReadTailLines reads the last maxLines lines from a file.
 // Returns the content, whether the file was truncated, and any error.
 func ReadTailLines(path string, maxLines int) (string, bool, error) {
@@ -95,9 +140,30 @@ func ReadTailLines(path string, maxLines int) (string, bool, error) {
 	}
 	defer f.Close()
 
+	info, err := f.Stat()
+	if err != nil {
+		return "", false, err
+	}
+
+	// For large files, seek to tail to avoid reading entire file into memory
+	truncatedBySize := false
+	if info.Size() > maxReadBytes {
+		if _, err := f.Seek(-maxReadBytes, io.SeekEnd); err == nil {
+			// Skip partial first line after seek
+			r := bufio.NewReader(f)
+			r.ReadLine() //nolint: discard partial line
+			truncatedBySize = true
+			// Re-wrap f with the buffered reader for scanning
+			return scanTailLines(r, maxLines, truncatedBySize)
+		}
+	}
+
+	return scanTailLines(bufio.NewReader(f), maxLines, truncatedBySize)
+}
+
+func scanTailLines(r io.Reader, maxLines int, alreadyTruncated bool) (string, bool, error) {
 	var lines []string
-	scanner := bufio.NewScanner(f)
-	// Increase buffer size for long lines
+	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		lines = append(lines, scanner.Text())
@@ -107,7 +173,7 @@ func ReadTailLines(path string, maxLines int) (string, bool, error) {
 	}
 
 	if len(lines) <= maxLines {
-		return strings.Join(lines, "\n"), false, nil
+		return strings.Join(lines, "\n"), alreadyTruncated, nil
 	}
 
 	tail := lines[len(lines)-maxLines:]
@@ -126,27 +192,6 @@ func FileType(name string) string {
 		return "pdf"
 	case ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico":
 		return "image"
-	}
-
-	// Known text extensions
-	textExts := map[string]bool{
-		".go": true, ".js": true, ".jsx": true, ".ts": true, ".tsx": true,
-		".py": true, ".rb": true, ".rs": true, ".java": true, ".c": true,
-		".cpp": true, ".h": true, ".hpp": true, ".cs": true, ".swift": true,
-		".kt": true, ".scala": true, ".php": true, ".lua": true, ".sh": true,
-		".bash": true, ".zsh": true, ".fish": true, ".ps1": true, ".bat": true,
-		".cmd": true, ".sql": true, ".html": true, ".htm": true, ".css": true,
-		".scss": true, ".sass": true, ".less": true, ".xml": true, ".json": true,
-		".yaml": true, ".yml": true, ".toml": true, ".ini": true, ".cfg": true,
-		".conf": true, ".env": true, ".txt": true, ".log": true, ".csv": true,
-		".tsv": true, ".graphql": true, ".gql": true, ".proto": true,
-		".dockerfile": true, ".gitignore": true, ".editorconfig": true,
-		".makefile": true, ".cmake": true, ".gradle": true, ".tf": true,
-		".hcl": true, ".r": true, ".m": true, ".mm": true, ".vue": true,
-		".svelte": true, ".astro": true, ".zig": true, ".nim": true,
-		".dart": true, ".ex": true, ".exs": true, ".erl": true, ".hs": true,
-		".ml": true, ".clj": true, ".lisp": true, ".el": true, ".v": true,
-		".wasm": false, // binary
 	}
 
 	if isText, ok := textExts[ext]; ok {
@@ -184,25 +229,6 @@ func FileType(name string) string {
 // LanguageFromExt returns the Shiki-compatible language identifier for a file extension.
 func LanguageFromExt(name string) string {
 	ext := strings.ToLower(filepath.Ext(name))
-
-	langMap := map[string]string{
-		".go": "go", ".js": "javascript", ".jsx": "jsx", ".ts": "typescript",
-		".tsx": "tsx", ".py": "python", ".rb": "ruby", ".rs": "rust",
-		".java": "java", ".c": "c", ".cpp": "cpp", ".h": "c", ".hpp": "cpp",
-		".cs": "csharp", ".swift": "swift", ".kt": "kotlin", ".scala": "scala",
-		".php": "php", ".lua": "lua", ".sh": "bash", ".bash": "bash",
-		".zsh": "bash", ".fish": "fish", ".ps1": "powershell",
-		".sql": "sql", ".html": "html", ".htm": "html", ".css": "css",
-		".scss": "scss", ".sass": "sass", ".less": "less",
-		".xml": "xml", ".json": "json", ".yaml": "yaml", ".yml": "yaml",
-		".toml": "toml", ".ini": "ini", ".graphql": "graphql",
-		".proto": "protobuf", ".dockerfile": "dockerfile",
-		".vue": "vue", ".svelte": "svelte", ".md": "markdown",
-		".r": "r", ".dart": "dart", ".ex": "elixir", ".exs": "elixir",
-		".erl": "erlang", ".hs": "haskell", ".ml": "ocaml",
-		".clj": "clojure", ".zig": "zig", ".nim": "nim",
-		".tf": "hcl", ".hcl": "hcl",
-	}
 
 	if lang, ok := langMap[ext]; ok {
 		return lang

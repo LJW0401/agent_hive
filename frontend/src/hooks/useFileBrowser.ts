@@ -13,6 +13,8 @@ interface UseFileBrowserResult {
   reset: () => void
 }
 
+const MAX_CACHE_ENTRIES = 50
+
 export function useFileBrowser(): UseFileBrowserResult {
   const [rootPath, setRootPath] = useState('')
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
@@ -48,6 +50,10 @@ export function useFileBrowser(): UseFileBrowserResult {
     setLoading(true)
     try {
       const content = await getFileContent(containerId, path)
+      if (cache.current.size >= MAX_CACHE_ENTRIES) {
+        const firstKey = cache.current.keys().next().value!
+        cache.current.delete(firstKey)
+      }
       cache.current.set(cacheKey, content)
       setFileContent(content)
     } catch (e) {

@@ -12,9 +12,6 @@ interface FileTreeProps {
 
 interface TreeNode extends FileEntry {
   path: string
-  children?: TreeNode[]
-  loaded?: boolean
-  loading?: boolean
 }
 
 function getFileIcon(name: string, type: string) {
@@ -52,6 +49,7 @@ function TreeItem({
   const [expanded, setExpanded] = useState(false)
   const [children, setChildren] = useState<TreeNode[]>([])
   const [loading, setLoading] = useState(false)
+  const [loaded, setLoaded] = useState(false)
 
   const toggleExpand = useCallback(async () => {
     if (node.type !== 'dir') return
@@ -61,7 +59,7 @@ function TreeItem({
       return
     }
 
-    if (!node.loaded) {
+    if (!loaded) {
       setLoading(true)
       try {
         const entries = await listFiles(containerId, node.path)
@@ -69,14 +67,14 @@ function TreeItem({
           ...e,
           path: node.path === '.' ? e.name : `${node.path}/${e.name}`,
         })))
-        node.loaded = true
+        setLoaded(true)
       } catch (e) {
         console.error('Failed to load directory:', e)
       }
       setLoading(false)
     }
     setExpanded(true)
-  }, [expanded, node, containerId])
+  }, [expanded, loaded, node, containerId])
 
   const handleClick = () => {
     if (node.type === 'dir') {

@@ -254,9 +254,6 @@ func (m *Manager) CreateTerminal(containerID string) (*Terminal, error) {
 		return nil, ErrContainerNotFound
 	}
 
-	c.mu.Lock()
-	c.mu.Unlock()
-
 	// Inherit CWD from default terminal
 	var cwd string
 	if dt := c.GetDefaultTerminal(); dt != nil {

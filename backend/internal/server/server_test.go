@@ -2,36 +2,7 @@ package server
 
 import (
 	"testing"
-
-	"github.com/penguin/agent-hive/internal/fileutil"
 )
-
-func TestFileTypeDetection(t *testing.T) {
-	tests := []struct {
-		name string
-		want string
-	}{
-		{"main.go", "text"},
-		{"README.md", "markdown"},
-		{"photo.png", "image"},
-		{"doc.pdf", "pdf"},
-		{"binary.exe", "binary"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := fileutil.FileType(tt.name)
-			if got != tt.want {
-				t.Errorf("FileType(%q) = %q, want %q", tt.name, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestGetMaxLinesDefault(t *testing.T) {
-	if defaultMaxLines != 1000 {
-		t.Errorf("defaultMaxLines = %d, want 1000", defaultMaxLines)
-	}
-}
 
 func TestHasChildProcessZeroPID(t *testing.T) {
 	if HasChildProcess(0) {

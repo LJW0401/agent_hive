@@ -769,15 +769,7 @@ func getFileContentHandler(mgr *container.Manager, containerID string, w http.Re
 		}
 
 	case "pdf":
-		data, err := readFileLimited(absPath, 50*1024*1024) // 50MB limit
-		if err != nil {
-			http.Error(w, "failed to read file", http.StatusInternalServerError)
-			return
-		}
-		resp = fileContentResponse{
-			Type:    "pdf",
-			Content: base64.StdEncoding.EncodeToString(data),
-		}
+		resp = fileContentResponse{Type: "pdf"}
 
 	case "markdown":
 		maxLines := getMaxLines(r)
@@ -841,6 +833,20 @@ func getRawFileHandler(mgr *container.Manager, containerID string, w http.Respon
 	absPath, err := fileutil.SafeJoin(cwd, relPath)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "file not found", http.StatusNotFound)
+		} else {
+			http.Error(w, "failed to stat file", http.StatusInternalServerError)
+		}
+		return
+	}
+	if info.IsDir() {
+		http.Error(w, "path is a directory", http.StatusBadRequest)
 		return
 	}
 
