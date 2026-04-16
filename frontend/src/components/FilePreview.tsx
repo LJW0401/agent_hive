@@ -120,6 +120,16 @@ function ImagePreview({ content, mimeType }: { content: string; mimeType?: strin
   )
 }
 
+function base64ToBlob(base64: string, mimeType: string): string {
+  const bytes = atob(base64)
+  const arr = new Uint8Array(bytes.length)
+  for (let i = 0; i < bytes.length; i++) {
+    arr[i] = bytes.charCodeAt(i)
+  }
+  const blob = new Blob([arr], { type: mimeType })
+  return URL.createObjectURL(blob)
+}
+
 function PdfPreview({ content }: { content: string }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [PdfComponents, setPdfComponents] = useState<{
@@ -128,20 +138,26 @@ function PdfPreview({ content }: { content: string }) {
   } | null>(null)
   const [numPages, setNumPages] = useState(0)
   const [containerWidth, setContainerWidth] = useState(600)
+  const [blobUrl, setBlobUrl] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     import('react-pdf').then(async (mod) => {
       if (cancelled) return
-      // Use the worker bundled with pdfjs-dist
-      mod.pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-        'pdfjs-dist/build/pdf.worker.min.mjs',
-        import.meta.url,
-      ).toString()
+      // Import worker via Vite ?url
+      const workerModule = await import('pdfjs-dist/build/pdf.worker.min.mjs?url')
+      mod.pdfjs.GlobalWorkerOptions.workerSrc = workerModule.default
       setPdfComponents({ Document: mod.Document, Page: mod.Page })
     })
     return () => { cancelled = true }
   }, [])
+
+  // Convert base64 to blob URL for better compatibility
+  useEffect(() => {
+    const url = base64ToBlob(content, 'application/pdf')
+    setBlobUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [content])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -154,12 +170,11 @@ function PdfPreview({ content }: { content: string }) {
     return () => observer.disconnect()
   }, [])
 
-  if (!PdfComponents) {
+  if (!PdfComponents || !blobUrl) {
     return <div className="p-4 text-[12px] text-gray-400">Loading PDF viewer...</div>
   }
 
   const { Document, Page } = PdfComponents
-  const dataUrl = `data:application/pdf;base64,${content}`
 
   return (
     <div className="flex flex-col h-full">
@@ -171,7 +186,7 @@ function PdfPreview({ content }: { content: string }) {
       <div ref={containerRef} className="flex-1 overflow-auto">
         <div className="flex flex-col items-center gap-2 p-4">
           <Document
-            file={dataUrl}
+            file={blobUrl}
             onLoadSuccess={({ numPages: n }) => setNumPages(n)}
             loading={<div className="text-[12px] text-gray-400">Loading PDF...</div>}
             error={<div className="text-[12px] text-red-400">Failed to load PDF</div>}
