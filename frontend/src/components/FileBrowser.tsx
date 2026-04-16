@@ -5,7 +5,6 @@ import type { FileContent } from '../api'
 
 interface FileBrowserProps {
   containerId: string
-  rootPath: string
   selectedFile: string | null
   fileContent: FileContent | null
   loading: boolean
@@ -18,7 +17,6 @@ const DEFAULT_TREE_RATIO = 0.3
 
 export default function FileBrowser({
   containerId,
-  rootPath,
   selectedFile,
   fileContent,
   loading,

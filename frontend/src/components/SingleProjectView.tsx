@@ -181,7 +181,6 @@ export default function SingleProjectView({
         {viewMode === 'files' && fileBrowser.rootPath && (
           <FileBrowser
             containerId={container.id}
-            rootPath={fileBrowser.rootPath}
             selectedFile={fileBrowser.selectedFile}
             fileContent={fileBrowser.fileContent}
             loading={fileBrowser.loading}

@@ -7,7 +7,6 @@ import ShortcutBar from './ShortcutBar'
 import TodoList from './TodoList'
 import MobileFileBrowser from './MobileFileBrowser'
 import { useTerminalTabs } from '../hooks/useTerminalTabs'
-import { getCWD } from '../api'
 import type { Container } from '../api'
 
 interface MobileProjectViewProps {
@@ -43,7 +42,6 @@ export default function MobileProjectView({
   const draggingRef = useRef(false)
 
   const [viewMode, setViewMode] = useState<'terminal' | 'files'>('terminal')
-  const [fileBrowserRoot, setFileBrowserRoot] = useState('')
 
   const {
     terminals, activeTerminalId, setActiveTerminalId,
@@ -52,19 +50,9 @@ export default function MobileProjectView({
     sendToActive,
   } = useTerminalTabs(container.id, terminalRefreshKey)
 
-  const toggleViewMode = useCallback(async () => {
-    if (viewMode === 'terminal') {
-      try {
-        const cwd = await getCWD(container.id)
-        setFileBrowserRoot(cwd)
-        setViewMode('files')
-      } catch (e) {
-        console.error('Failed to get CWD:', e)
-      }
-    } else {
-      setViewMode('terminal')
-    }
-  }, [viewMode, container.id])
+  const toggleViewMode = useCallback(() => {
+    setViewMode(prev => prev === 'terminal' ? 'files' : 'terminal')
+  }, [])
 
   useEffect(() => {
     setName(container.name)
@@ -178,9 +166,9 @@ export default function MobileProjectView({
       </div>
 
       {/* File browser mode */}
-      {viewMode === 'files' && fileBrowserRoot && (
+      {viewMode === 'files' && (
         <div className="flex-1 min-h-0 overflow-hidden">
-          <MobileFileBrowser containerId={container.id} rootPath={fileBrowserRoot} />
+          <MobileFileBrowser containerId={container.id} />
         </div>
       )}
 

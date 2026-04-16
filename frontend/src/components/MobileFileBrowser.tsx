@@ -6,10 +6,9 @@ import { useFileBrowser } from '../hooks/useFileBrowser'
 
 interface MobileFileBrowserProps {
   containerId: string
-  rootPath: string
 }
 
-export default function MobileFileBrowser({ containerId, rootPath }: MobileFileBrowserProps) {
+export default function MobileFileBrowser({ containerId }: MobileFileBrowserProps) {
   const [view, setView] = useState<'tree' | 'preview'>('tree')
   const fileBrowser = useFileBrowser()
 
