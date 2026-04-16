@@ -80,7 +80,7 @@ func migrate(db *sql.DB) error {
 		CREATE TABLE IF NOT EXISTS terminals (
 			id           TEXT PRIMARY KEY,
 			container_id TEXT NOT NULL,
-			name         TEXT NOT NULL DEFAULT 'Terminal',
+			name         TEXT NOT NULL DEFAULT 'Agent',
 			is_default   INTEGER NOT NULL DEFAULT 0,
 			sort_order   INTEGER NOT NULL DEFAULT 0,
 			created_at   DATETIME NOT NULL DEFAULT (datetime('now'))
@@ -99,7 +99,9 @@ func (s *Store) migrateTerminals() error {
 		return err
 	}
 	if termCount > 0 {
-		return nil // already migrated
+		// Fix default terminal names that aren't "Agent"
+		s.db.Exec(`UPDATE terminals SET name = 'Agent' WHERE is_default = 1 AND name != 'Agent'`)
+		return nil
 	}
 
 	containers, err := s.ListContainerMeta()
@@ -119,7 +121,7 @@ func (s *Store) migrateTerminals() error {
 		_, err := s.db.Exec(
 			`INSERT INTO terminals (id, container_id, name, is_default, sort_order, created_at)
 			 VALUES (?, ?, ?, 1, 0, ?)`,
-			tid, c.ID, "Terminal", now,
+			tid, c.ID, "Agent", now,
 		)
 		if err != nil {
 			log.Printf("warning: failed to create default terminal for %s: %v", c.ID, err)

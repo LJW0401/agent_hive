@@ -15,7 +15,7 @@ func newTestStore(t *testing.T) *Store {
 func TestCreateAndListTerminals(t *testing.T) {
 	s := newTestStore(t)
 
-	t1, err := s.CreateTerminal("c-1", "t-1", "Terminal", true)
+	t1, err := s.CreateTerminal("c-1", "t-1", "Agent", true)
 	if err != nil {
 		t.Fatalf("CreateTerminal: %v", err)
 	}
@@ -107,20 +107,20 @@ func TestListTerminalsEmpty(t *testing.T) {
 
 func TestGetTerminal(t *testing.T) {
 	s := newTestStore(t)
-	s.CreateTerminal("c-1", "t-1", "Terminal", true)
+	s.CreateTerminal("c-1", "t-1", "Agent", true)
 
 	tm, err := s.GetTerminal("t-1")
 	if err != nil {
 		t.Fatalf("GetTerminal: %v", err)
 	}
-	if tm.Name != "Terminal" || !tm.IsDefault {
+	if tm.Name != "Agent" || !tm.IsDefault {
 		t.Errorf("GetTerminal returned wrong data: %+v", tm)
 	}
 }
 
 func TestGetDefaultTerminal(t *testing.T) {
 	s := newTestStore(t)
-	s.CreateTerminal("c-1", "t-1", "Terminal", true)
+	s.CreateTerminal("c-1", "t-1", "Agent", true)
 	s.CreateTerminal("c-1", "t-2", "Terminal 2", false)
 
 	dt, err := s.GetDefaultTerminal("c-1")

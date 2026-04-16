@@ -159,7 +159,7 @@ func (m *Manager) Create(name string) (*Container, error) {
 
 	term := &Terminal{
 		ID:        tid,
-		Name:      "Terminal",
+		Name:      "Agent",
 		IsDefault: true,
 		Connected: true,
 		session:   session,
@@ -181,7 +181,7 @@ func (m *Manager) Create(name string) (*Container, error) {
 
 	// Persist terminal metadata
 	if m.db != nil {
-		m.db.CreateTerminal(id, tid, "Terminal", true)
+		m.db.CreateTerminal(id, tid, "Agent", true)
 	}
 
 	go m.pumpOutput(c, term)
