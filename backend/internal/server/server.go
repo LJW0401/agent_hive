@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httputil"
@@ -513,11 +514,12 @@ func listTerminals(mgr *container.Manager, containerID string, w http.ResponseWr
 func createTerminalHandler(mgr *container.Manager, containerID string, w http.ResponseWriter) {
 	term, err := mgr.CreateTerminal(containerID)
 	if err != nil {
-		if err.Error() == "terminal limit reached (max 5)" {
+		switch {
+		case errors.Is(err, container.ErrTerminalLimit):
 			http.Error(w, err.Error(), http.StatusBadRequest)
-		} else if err.Error() == "container not found" {
+		case errors.Is(err, container.ErrContainerNotFound):
 			http.Error(w, err.Error(), http.StatusNotFound)
-		} else {
+		default:
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 		return
@@ -536,11 +538,12 @@ func createTerminalHandler(mgr *container.Manager, containerID string, w http.Re
 func deleteTerminalHandler(mgr *container.Manager, containerID, terminalID string, w http.ResponseWriter) {
 	err := mgr.DeleteTerminal(containerID, terminalID)
 	if err != nil {
-		if err.Error() == "cannot delete default terminal" {
+		switch {
+		case errors.Is(err, container.ErrDefaultTerminal):
 			http.Error(w, err.Error(), http.StatusBadRequest)
-		} else if err.Error() == "container not found" || err.Error() == "terminal not found" {
+		case errors.Is(err, container.ErrContainerNotFound), errors.Is(err, container.ErrTerminalNotFound):
 			http.Error(w, err.Error(), http.StatusNotFound)
-		} else {
+		default:
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 		return

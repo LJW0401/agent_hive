@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { ChevronLeft, ChevronRight, Pencil, Check, X } from 'lucide-react'
-import Terminal, { type TerminalHandle } from './Terminal'
+import Terminal from './Terminal'
 import TerminalTabBar from './TerminalTabBar'
 import ConfirmDialog from './ConfirmDialog'
 import TodoList from './TodoList'
-import { listTerminals, createTerminal, deleteTerminal, hasProcess } from '../api'
-import type { Container, TerminalInfo } from '../api'
+import { useTerminalTabs } from '../hooks/useTerminalTabs'
+import type { Container } from '../api'
 
 interface SingleProjectViewProps {
   container: Container
@@ -42,24 +42,15 @@ export default function SingleProjectView({
   const bodyRef = useRef<HTMLDivElement>(null)
   const draggingRef = useRef(false)
 
-  // Terminal tabs state
-  const [terminals, setTerminals] = useState<TerminalInfo[]>([])
-  const [activeTerminalId, setActiveTerminalId] = useState<string>('')
-  const [confirmClose, setConfirmClose] = useState<string | null>(null)
-  const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map())
+  const {
+    terminals, activeTerminalId, setActiveTerminalId,
+    confirmClose, terminalRefs,
+    handleCreateTerminal, handleCloseTerminal, doCloseTerminal, cancelClose,
+  } = useTerminalTabs(container.id, terminalRefreshKey)
 
   useEffect(() => {
     setName(container.name)
   }, [container.name])
-
-  useEffect(() => {
-    listTerminals(container.id).then((terms) => {
-      setTerminals(terms)
-      if (terms.length > 0 && !activeTerminalId) {
-        setActiveTerminalId(terms.find(t => t.isDefault)?.id ?? terms[0].id)
-      }
-    })
-  }, [container.id, terminalRefreshKey])
 
   useEffect(() => {
     if (editing) {
@@ -100,46 +91,6 @@ export default function SingleProjectView({
     document.addEventListener('mouseup', onMouseUp)
   }, [])
 
-  const handleCreateTerminal = async () => {
-    try {
-      const term = await createTerminal(container.id)
-      setTerminals(prev => [...prev, term])
-      setActiveTerminalId(term.id)
-    } catch (e) {
-      console.error('create terminal failed:', e)
-    }
-  }
-
-  const handleCloseTerminal = async (tid: string) => {
-    try {
-      const hasProc = await hasProcess(container.id, tid)
-      if (hasProc) {
-        setConfirmClose(tid)
-        return
-      }
-      await doCloseTerminal(tid)
-    } catch {
-      setConfirmClose(tid)
-    }
-  }
-
-  const doCloseTerminal = async (tid: string) => {
-    try {
-      await deleteTerminal(container.id, tid)
-      setTerminals(prev => {
-        const remaining = prev.filter(t => t.id !== tid)
-        if (activeTerminalId === tid && remaining.length > 0) {
-          const oldIdx = prev.findIndex(t => t.id === tid)
-          const newIdx = Math.min(oldIdx, remaining.length - 1)
-          setActiveTerminalId(remaining[newIdx].id)
-        }
-        return remaining
-      })
-    } catch (e) {
-      console.error('delete terminal failed:', e)
-    }
-    setConfirmClose(null)
-  }
 
   const todoHidden = todoRatio < 0.02
 
@@ -258,7 +209,7 @@ export default function SingleProjectView({
         title="Close terminal?"
         message="This terminal has a running process. Are you sure you want to close it?"
         onConfirm={() => confirmClose && doCloseTerminal(confirmClose)}
-        onCancel={() => setConfirmClose(null)}
+        onCancel={cancelClose}
       />
     </div>
   )

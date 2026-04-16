@@ -38,6 +38,7 @@ import {
 } from './api'
 
 const PAGE_SIZE = 4
+const LAYOUT_KEY = 'agent_hive_layout_mode'
 
 // Custom PointerSensor that only activates when the event originates from a [data-drag-handle] element
 class DragHandlePointerSensor extends LibPointerSensor {
@@ -82,8 +83,6 @@ function DesktopApp() {
   const [todoRefresh, setTodoRefresh] = useState<Record<string, number>>({})
   const [terminalRefresh, setTerminalRefresh] = useState<Record<string, number>>({})
 
-  // Layout mode: multi-project grid vs single-project fullscreen
-  const LAYOUT_KEY = 'agent_hive_layout_mode'
   const [layoutMode, setLayoutMode] = useState<'multi' | 'single'>(() => {
     const saved = localStorage.getItem(LAYOUT_KEY)
     return saved === 'single' ? 'single' : 'multi'

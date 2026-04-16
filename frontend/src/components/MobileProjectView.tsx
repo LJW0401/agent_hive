@@ -1,12 +1,12 @@
 import { useState, useRef, useEffect } from 'react'
 import { X, Pencil, Check, ChevronLeft, ChevronRight } from 'lucide-react'
-import Terminal, { type TerminalHandle } from './Terminal'
+import Terminal from './Terminal'
 import TerminalTabBar from './TerminalTabBar'
 import ConfirmDialog from './ConfirmDialog'
 import ShortcutBar from './ShortcutBar'
 import TodoList from './TodoList'
-import { listTerminals, createTerminal, deleteTerminal, hasProcess } from '../api'
-import type { Container, TerminalInfo } from '../api'
+import { useTerminalTabs } from '../hooks/useTerminalTabs'
+import type { Container } from '../api'
 
 interface MobileProjectViewProps {
   container: Container
@@ -36,25 +36,16 @@ export default function MobileProjectView({
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(container.name)
   const inputRef = useRef<HTMLInputElement>(null)
-  const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map())
   const [splitRatio, setSplitRatio] = useState(0.7) // 7/3 default: terminal 70%, todo 30%
   const splitContainerRef = useRef<HTMLDivElement>(null)
   const draggingRef = useRef(false)
 
-  // Terminal tabs state
-  const [terminals, setTerminals] = useState<TerminalInfo[]>([])
-  const [activeTerminalId, setActiveTerminalId] = useState<string>('')
-  const [confirmClose, setConfirmClose] = useState<string | null>(null)
-
-  // Load terminals
-  useEffect(() => {
-    listTerminals(container.id).then((terms) => {
-      setTerminals(terms)
-      if (terms.length > 0 && !activeTerminalId) {
-        setActiveTerminalId(terms.find(t => t.isDefault)?.id ?? terms[0].id)
-      }
-    })
-  }, [container.id, terminalRefreshKey])
+  const {
+    terminals, activeTerminalId, setActiveTerminalId,
+    confirmClose, terminalRefs,
+    handleCreateTerminal, handleCloseTerminal, doCloseTerminal, cancelClose,
+    sendToActive,
+  } = useTerminalTabs(container.id, terminalRefreshKey)
 
   useEffect(() => {
     setName(container.name)
@@ -75,52 +66,6 @@ export default function MobileProjectView({
       setName(container.name)
     }
     setEditing(false)
-  }
-
-  const handleSendData = (data: string) => {
-    const handle = terminalRefs.current.get(activeTerminalId)
-    handle?.sendData(data)
-  }
-
-  const handleCreateTerminal = async () => {
-    try {
-      const term = await createTerminal(container.id)
-      setTerminals(prev => [...prev, term])
-      setActiveTerminalId(term.id)
-    } catch (e) {
-      console.error('create terminal failed:', e)
-    }
-  }
-
-  const handleCloseTerminal = async (tid: string) => {
-    try {
-      const hasProc = await hasProcess(container.id, tid)
-      if (hasProc) {
-        setConfirmClose(tid)
-        return
-      }
-      await doCloseTerminal(tid)
-    } catch {
-      setConfirmClose(tid)
-    }
-  }
-
-  const doCloseTerminal = async (tid: string) => {
-    try {
-      await deleteTerminal(container.id, tid)
-      setTerminals(prev => {
-        const remaining = prev.filter(t => t.id !== tid)
-        if (activeTerminalId === tid && remaining.length > 0) {
-          const oldIdx = prev.findIndex(t => t.id === tid)
-          const newIdx = Math.min(oldIdx, remaining.length - 1)
-          setActiveTerminalId(remaining[newIdx].id)
-        }
-        return remaining
-      })
-    } catch (e) {
-      console.error('delete terminal failed:', e)
-    }
-    setConfirmClose(null)
   }
 
   // Split pane touch handlers
@@ -248,7 +193,7 @@ export default function MobileProjectView({
               </div>
             ))}
           </div>
-          <ShortcutBar onSend={handleSendData} />
+          <ShortcutBar onSend={sendToActive} />
         </div>
 
         {/* Drag handle */}
@@ -270,7 +215,7 @@ export default function MobileProjectView({
         title="Close terminal?"
         message="This terminal has a running process. Are you sure you want to close it?"
         onConfirm={() => confirmClose && doCloseTerminal(confirmClose)}
-        onCancel={() => setConfirmClose(null)}
+        onCancel={cancelClose}
       />
     </div>
   )

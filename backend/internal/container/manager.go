@@ -1,17 +1,27 @@
 package container
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	ptypkg "github.com/penguin/agent-hive/internal/pty"
 	"github.com/penguin/agent-hive/internal/store"
+)
+
+var (
+	ErrContainerNotFound = errors.New("container not found")
+	ErrTerminalNotFound  = errors.New("terminal not found")
+	ErrTerminalLimit     = errors.New("terminal limit reached")
+	ErrDefaultTerminal   = errors.New("cannot delete default terminal")
+	ErrAlreadyConnected  = errors.New("terminal already connected")
 )
 
 const defaultHistoryLineLimit = 1000
@@ -97,7 +107,7 @@ func (c *Container) GetDefaultTerminal() *Terminal {
 	return nil
 }
 
-// ListTerminals returns all terminals.
+// ListTerminals returns all terminals, sorted with default first then by ID.
 func (c *Container) ListTerminals() []*Terminal {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -105,7 +115,28 @@ func (c *Container) ListTerminals() []*Terminal {
 	for _, t := range c.terminals {
 		list = append(list, t)
 	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].IsDefault != list[j].IsDefault {
+			return list[i].IsDefault
+		}
+		return list[i].ID < list[j].ID
+	})
 	return list
+}
+
+// nextTerminalName finds the next available "Terminal N" name.
+func nextTerminalName(terminals map[string]*Terminal) string {
+	used := make(map[string]bool)
+	for _, t := range terminals {
+		used[t.Name] = true
+	}
+	for n := 2; n <= 6; n++ {
+		name := fmt.Sprintf("Terminal %d", n)
+		if !used[name] {
+			return name
+		}
+	}
+	return fmt.Sprintf("Terminal %d", len(terminals)+1)
 }
 
 // Manager manages multiple containers and their terminals.
@@ -195,19 +226,18 @@ func (m *Manager) CreateTerminal(containerID string) (*Terminal, error) {
 	c, ok := m.containers[containerID]
 	m.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("container not found")
+		return nil, ErrContainerNotFound
 	}
 
+	// Check limit before expensive PTY creation
 	c.mu.Lock()
-	count := len(c.terminals)
+	if len(c.terminals) >= 5 {
+		c.mu.Unlock()
+		return nil, ErrTerminalLimit
+	}
 	c.mu.Unlock()
 
-	if count >= 5 {
-		return nil, fmt.Errorf("terminal limit reached (max 5)")
-	}
-
 	tid := m.nextTerminalID(containerID)
-	name := fmt.Sprintf("Terminal %d", count+1)
 
 	session, err := ptypkg.NewSession(m.ptyOpts)
 	if err != nil {
@@ -222,6 +252,17 @@ func (m *Manager) CreateTerminal(containerID string) (*Terminal, error) {
 		return nil, err
 	}
 
+	// Re-check under lock and insert atomically
+	c.mu.Lock()
+	if len(c.terminals) >= 5 {
+		c.mu.Unlock()
+		session.Close()
+		logFile.Close()
+		os.Remove(m.terminalLogPath(containerID, tid))
+		return nil, ErrTerminalLimit
+	}
+	// Find next available terminal number to avoid duplicate names
+	name := nextTerminalName(c.terminals)
 	term := &Terminal{
 		ID:        tid,
 		Name:      name,
@@ -231,8 +272,6 @@ func (m *Manager) CreateTerminal(containerID string) (*Terminal, error) {
 		logFile:   logFile,
 		listeners: make(map[*Listener]bool),
 	}
-
-	c.mu.Lock()
 	c.terminals[tid] = term
 	c.mu.Unlock()
 
@@ -251,18 +290,18 @@ func (m *Manager) DeleteTerminal(containerID, terminalID string) error {
 	c, ok := m.containers[containerID]
 	m.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("container not found")
+		return ErrContainerNotFound
 	}
 
 	c.mu.Lock()
 	term, ok := c.terminals[terminalID]
 	if !ok {
 		c.mu.Unlock()
-		return fmt.Errorf("terminal not found")
+		return ErrTerminalNotFound
 	}
 	if term.IsDefault {
 		c.mu.Unlock()
-		return fmt.Errorf("cannot delete default terminal")
+		return ErrDefaultTerminal
 	}
 	delete(c.terminals, terminalID)
 	c.mu.Unlock()
@@ -341,7 +380,7 @@ func (m *Manager) Reopen(containerID string) error {
 	c, ok := m.containers[containerID]
 	m.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("container not found")
+		return ErrContainerNotFound
 	}
 
 	// Reopen all terminals in the container
@@ -373,14 +412,14 @@ func (m *Manager) ReopenTerminal(containerID, terminalID string) error {
 	c, ok := m.containers[containerID]
 	m.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("container not found")
+		return ErrContainerNotFound
 	}
 
 	c.mu.Lock()
 	t, ok := c.terminals[terminalID]
 	c.mu.Unlock()
 	if !ok {
-		return fmt.Errorf("terminal not found")
+		return ErrTerminalNotFound
 	}
 
 	return m.reopenTerminal(c, t)
@@ -390,7 +429,7 @@ func (m *Manager) reopenTerminal(c *Container, t *Terminal) error {
 	t.mu.Lock()
 	if t.session != nil {
 		t.mu.Unlock()
-		return fmt.Errorf("terminal already connected")
+		return ErrAlreadyConnected
 	}
 
 	session, err := ptypkg.NewSession(m.ptyOpts)
@@ -556,21 +595,6 @@ func (m *Manager) ReadHistory(containerID, terminalID string) ([]byte, error) {
 	}
 
 	return readHistoryFile(m.terminalLogPath(containerID, terminalID), lineLimit)
-}
-
-// ReadHistoryLegacy reads history for the old single-terminal format (backward compat).
-func (m *Manager) ReadHistoryLegacy(containerID string) ([]byte, error) {
-	// Try new format first: find default terminal
-	m.mu.RLock()
-	c, ok := m.containers[containerID]
-	m.mu.RUnlock()
-	if ok {
-		dt := c.GetDefaultTerminal()
-		if dt != nil {
-			return m.ReadHistory(containerID, dt.ID)
-		}
-	}
-	return nil, fmt.Errorf("no default terminal found")
 }
 
 func readHistoryFile(path string, lineLimit int) ([]byte, error) {
