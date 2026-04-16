@@ -47,7 +47,8 @@ func Load(path string) (*Config, error) {
 
 	if cfg.User == "" || cfg.Shell == "" {
 		if err := cfg.inferUserFromFile(path); err != nil {
-			// Not fatal — fall back to current process user
+			// File owner detection failed — fall back to current process user
+			cfg.fallbackToCurrentUser()
 		}
 	}
 
@@ -77,6 +78,20 @@ func (c *Config) inferUserFromFile(path string) error {
 		c.Shell = LookupUserShell(u.Username)
 	}
 	return nil
+}
+
+// fallbackToCurrentUser fills User/Shell from the current process user.
+func (c *Config) fallbackToCurrentUser() {
+	u, err := user.Current()
+	if err != nil {
+		return
+	}
+	if c.User == "" {
+		c.User = u.Username
+	}
+	if c.Shell == "" {
+		c.Shell = LookupUserShell(u.Username)
+	}
 }
 
 // LookupUserShell finds the default shell for a user from /etc/passwd.

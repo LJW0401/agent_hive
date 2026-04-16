@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/creack/pty"
+	"github.com/penguin/agent-hive/internal/config"
 )
 
 // SessionOptions configures a PTY session.
@@ -79,7 +80,7 @@ func resolveSessionParams(opts *SessionOptions) (shell string, env []string, sys
 
 		dir = u.HomeDir
 		if shell == "" {
-			shell = lookupShellFromPasswd(targetUser)
+			shell = config.LookupUserShell(targetUser)
 		}
 
 		env = buildUserEnv(u, shell)
@@ -107,51 +108,6 @@ func buildUserEnv(u *user.User, shell string) []string {
 		"TERM=xterm-256color",
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
-}
-
-func lookupShellFromPasswd(username string) string {
-	data, err := os.ReadFile("/etc/passwd")
-	if err != nil {
-		return "/bin/bash"
-	}
-	for _, line := range splitLines(data) {
-		fields := splitColon(line)
-		if len(fields) >= 7 && fields[0] == username {
-			s := fields[6]
-			if s != "" {
-				return s
-			}
-		}
-	}
-	return "/bin/bash"
-}
-
-func splitLines(data []byte) []string {
-	var lines []string
-	start := 0
-	for i, b := range data {
-		if b == '\n' {
-			lines = append(lines, string(data[start:i]))
-			start = i + 1
-		}
-	}
-	if start < len(data) {
-		lines = append(lines, string(data[start:]))
-	}
-	return lines
-}
-
-func splitColon(s string) []string {
-	var parts []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == ':' {
-			parts = append(parts, s[start:i])
-			start = i + 1
-		}
-	}
-	parts = append(parts, s[start:])
-	return parts
 }
 
 // Read reads from the PTY output.

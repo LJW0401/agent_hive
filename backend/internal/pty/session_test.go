@@ -61,21 +61,3 @@ func TestResolveSessionParams_NonRootIgnoresUser(t *testing.T) {
 	}
 }
 
-func TestLookupShellFromPasswd(t *testing.T) {
-	u, err := user.Current()
-	if err != nil {
-		t.Skip("cannot get current user")
-	}
-
-	shell := lookupShellFromPasswd(u.Username)
-	if shell == "" || shell[0] != '/' {
-		t.Fatalf("expected absolute shell path, got %q", shell)
-	}
-}
-
-func TestLookupShellFromPasswd_NonExistent(t *testing.T) {
-	shell := lookupShellFromPasswd("nonexistent_user_xyz_99999")
-	if shell != "/bin/bash" {
-		t.Fatalf("expected /bin/bash fallback, got %q", shell)
-	}
-}

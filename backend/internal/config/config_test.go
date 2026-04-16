@@ -84,3 +84,32 @@ func TestLoad_InfersUserFromFileOwner(t *testing.T) {
 		t.Fatal("expected non-empty shell from inference")
 	}
 }
+
+func TestFallbackToCurrentUser(t *testing.T) {
+	u, err := user.Current()
+	if err != nil {
+		t.Skip("cannot get current user")
+	}
+
+	cfg := &Config{}
+	cfg.fallbackToCurrentUser()
+
+	if cfg.User != u.Username {
+		t.Fatalf("expected user %q, got %q", u.Username, cfg.User)
+	}
+	if cfg.Shell == "" {
+		t.Fatal("expected non-empty shell from fallback")
+	}
+}
+
+func TestFallbackToCurrentUser_PartialFill(t *testing.T) {
+	cfg := &Config{User: "already-set"}
+	cfg.fallbackToCurrentUser()
+
+	if cfg.User != "already-set" {
+		t.Fatalf("expected user not overwritten, got %q", cfg.User)
+	}
+	if cfg.Shell == "" {
+		t.Fatal("expected shell to be filled by fallback")
+	}
+}

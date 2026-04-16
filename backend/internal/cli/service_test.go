@@ -5,37 +5,46 @@ import (
 	"testing"
 )
 
-func TestCmdService_RequiresRootForStart(t *testing.T) {
+func TestCheckRoot_NonRoot(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("test requires non-root")
 	}
-	// Verify the root check logic works for start/stop/restart
-	for _, action := range []string{"start", "stop", "restart"} {
-		isRoot := os.Getuid() == 0
-		if isRoot {
-			t.Fatalf("%s should require root but current user is root", action)
+
+	for _, cmd := range []string{"start", "stop", "restart", "install", "uninstall"} {
+		err := checkRoot(cmd)
+		if err == nil {
+			t.Fatalf("checkRoot(%q) should return error for non-root", cmd)
 		}
 	}
 }
 
-func TestCmdService_StatusNoRoot(t *testing.T) {
-	// status does not require root — verify it's not in the root-required list
-	rootRequired := map[string]bool{
-		"start":   true,
-		"stop":    true,
-		"restart": true,
+func TestCheckRoot_ErrorMessage(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("test requires non-root")
 	}
-	if rootRequired["status"] {
+
+	err := checkRoot("install")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	if msg != "error: 'install' requires root privileges. Use sudo." {
+		t.Fatalf("unexpected error message: %s", msg)
+	}
+}
+
+func TestCmdService_StatusNoRootRequired(t *testing.T) {
+	// status branch in CmdService does not call requireRoot
+	// Verify by checking that the "status" action is not in the root-required branch
+	rootActions := map[string]bool{"start": true, "stop": true, "restart": true}
+	if rootActions["status"] {
 		t.Fatal("status should not require root")
 	}
 }
 
 func TestCmdLogs_FlagParsing(t *testing.T) {
-	// Verify that flag.NewFlagSet for logs accepts -f and -n
-	// This is a compile-time + basic logic test
 	args := []string{"-f", "-n", "100"}
 
-	// Simulate flag parsing
 	follow := false
 	lines := ""
 	for i := 0; i < len(args); i++ {

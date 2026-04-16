@@ -73,6 +73,16 @@ func CmdInstall(args []string) {
 		}
 	}
 
+	// Validate paths have no spaces (systemd ExecStart parsing is fragile with spaces)
+	if strings.ContainsAny(exePath, " \t") {
+		fmt.Fprintf(os.Stderr, "error: binary path %q contains spaces, which is not supported by systemd ExecStart\n", exePath)
+		os.Exit(1)
+	}
+	if strings.ContainsAny(absConfig, " \t") {
+		fmt.Fprintf(os.Stderr, "error: config path %q contains spaces, which is not supported by systemd ExecStart\n", absConfig)
+		os.Exit(1)
+	}
+
 	// Generate service file
 	data := serviceTemplateData{
 		ExecStart: exePath + " run --config " + absConfig,
@@ -98,10 +108,18 @@ func CmdInstall(args []string) {
 }
 
 func requireRoot(cmd string) {
-	if os.Getuid() != 0 {
-		fmt.Fprintf(os.Stderr, "error: '%s' requires root privileges. Use sudo.\n", cmd)
+	if err := checkRoot(cmd); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// checkRoot returns an error if not running as root. Testable.
+func checkRoot(cmd string) error {
+	if os.Getuid() != 0 {
+		return fmt.Errorf("error: '%s' requires root privileges. Use sudo.", cmd)
+	}
+	return nil
 }
 
 func runSystemctl(args ...string) error {

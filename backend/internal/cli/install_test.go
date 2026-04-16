@@ -49,3 +49,13 @@ func TestServiceName(t *testing.T) {
 		t.Fatalf("unexpected service name: %s", serviceName)
 	}
 }
+
+func TestRenderServiceFile_PathsInExecStart(t *testing.T) {
+	content, err := RenderServiceFile("/opt/agent-hive run --config /opt/config.yaml", "/opt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(content, "ExecStart=/opt/agent-hive run --config /opt/config.yaml") {
+		t.Fatal("ExecStart path not rendered correctly")
+	}
+}
