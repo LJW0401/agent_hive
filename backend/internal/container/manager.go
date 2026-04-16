@@ -19,7 +19,6 @@ import (
 var (
 	ErrContainerNotFound = errors.New("container not found")
 	ErrTerminalNotFound  = errors.New("terminal not found")
-	ErrTerminalLimit     = errors.New("terminal limit reached")
 	ErrDefaultTerminal   = errors.New("cannot delete default terminal")
 	ErrAlreadyConnected  = errors.New("terminal already connected")
 )
@@ -229,12 +228,7 @@ func (m *Manager) CreateTerminal(containerID string) (*Terminal, error) {
 		return nil, ErrContainerNotFound
 	}
 
-	// Check limit before expensive PTY creation
 	c.mu.Lock()
-	if len(c.terminals) >= 5 {
-		c.mu.Unlock()
-		return nil, ErrTerminalLimit
-	}
 	c.mu.Unlock()
 
 	tid := m.nextTerminalID(containerID)
@@ -252,15 +246,8 @@ func (m *Manager) CreateTerminal(containerID string) (*Terminal, error) {
 		return nil, err
 	}
 
-	// Re-check under lock and insert atomically
+	// Insert under lock atomically
 	c.mu.Lock()
-	if len(c.terminals) >= 5 {
-		c.mu.Unlock()
-		session.Close()
-		logFile.Close()
-		os.Remove(m.terminalLogPath(containerID, tid))
-		return nil, ErrTerminalLimit
-	}
 	// Find next available terminal number to avoid duplicate names
 	name := nextTerminalName(c.terminals)
 	term := &Terminal{

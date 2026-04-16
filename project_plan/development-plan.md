@@ -1,4 +1,4 @@
-# Agent Hive 多终端与布局增强 开发方案
+# Agent Hive 开发方案 — 文件浏览模式 & 终端更新
 
 > 创建日期：2026-04-16
 > 状态：已审核
@@ -10,534 +10,491 @@
 ### 1.1 技术架构
 
 ```
-                  ┌──────────────────────────────────────────┐
-                  │              Frontend (React)             │
-                  │                                          │
-                  │  App.tsx ─── ProjectContainer ──┐        │
-                  │    │          (multi/single)    │        │
-                  │    │                      TerminalTabBar │
-                  │    │                           │        │
-                  │  MobileApp ── MobileProjectView ──┘     │
-                  │                                          │
-                  └──────┬──────────────┬───────────────────┘
-                         │              │
-                    REST API      WebSocket
-                         │              │
-                  ┌──────┴──────────────┴───────────────────┐
-                  │              Backend (Go)                 │
-                  │                                          │
-                  │  Manager ─── Container ─── Terminal[]    │
-                  │                  │           ├ session    │
-                  │                  │           ├ logFile    │
-                  │                  │           └ listeners  │
-                  │                                          │
-                  │  SQLite: containers + terminals + ...    │
-                  └──────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                     Browser (React)                      │
+│  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐  │
+│  │ Todo+Terminal │⇄│ File Browser  │  │  Mode Switch  │  │
+│  │   (现有)      │  │   (新增)      │  │  (标题栏按钮)  │  │
+│  └──────────────┘  └──────┬───────┘  └───────────────┘  │
+│                           │                              │
+│  ┌────────────────────────┼──────────────────────────┐   │
+│  │  FileTree  │  Splitter │  FilePreview             │   │
+│  │  (懒加载)   │  (可拖拽)  │  Shiki / Markdown / Img  │   │
+│  └────────────┴───────────┴──────────────────────────┘   │
+└───────────────────────────┬──────────────────────────────┘
+                            │ REST API
+┌───────────────────────────┼──────────────────────────────┐
+│                     Go Backend                            │
+│  ┌─────────────────┐  ┌───┴───────────────────────────┐  │
+│  │ Container/Terminal│  │ File API (新增)               │  │
+│  │ Manager (现有)    │  │ GET /cwd                     │  │
+│  │                  │  │ GET /files?path=              │  │
+│  │ PTY Session ─────┼──│ GET /files/content?path=     │  │
+│  │  └─ PID() ──────┼──│  └─ /proc/{pid}/cwd          │  │
+│  └─────────────────┘  └───────────────────────────────┘  │
+│                                                          │
+│  安全层：路径遍历防护，二进制检测，大文件截断              │
+└──────────────────────────────────────────────────────────┘
 ```
-
-**核心变更**：将 `Container` 中的单一 PTY session 拆分为 `Terminal` 子结构，每个容器持有 `map[string]*Terminal`。WebSocket 路由增加 `tid` 参数路由到具体终端。
 
 ### 1.2 技术栈
 
 | 类别 | 选择 | 说明 |
 |------|------|------|
-| 后端语言 | Go | 不变 |
-| 前端框架 | React + TypeScript | 不变 |
-| 终端模拟 | xterm.js | 不变 |
-| 数据库 | SQLite (WAL) | 新增 terminals 表 |
-| 样式 | Tailwind CSS | 不变 |
-| 布局持久化 | localStorage | 桌面布局模式存前端 |
-| 进程检测 | /proc/{pid}/stat | Linux 子进程树检测 |
+| 后端 | Go | 现有技术栈 |
+| 前端 | React + TypeScript | 现有技术栈 |
+| 语法高亮 | Shiki | VS Code 同源高亮质量，异步加载 |
+| Markdown 渲染 | react-markdown + remark-gfm | GFM 表格、复选框支持 |
+| Markdown 排版 | @tailwindcss/typography | prose 类一键美化 |
+| PDF 预览 | react-pdf | 基于 pdf.js 的 React 封装 |
+| E2E 测试 | Playwright | 浏览器自动化测试 |
 
-### 1.3 项目结构变更
+### 1.3 项目结构（新增部分）
 
 ```
 backend/internal/
-├── container/
-│   ├── manager.go          # 重构：Container 持有 Terminal map
-│   └── terminal.go         # 新增：Terminal 子结构（session, logFile, listeners）
-├── store/
-│   ├── store.go            # 新增 terminals 表 + 迁移逻辑
-│   └── terminal.go         # 新增：Terminal CRUD 数据访问
 ├── server/
-│   └── server.go           # 新增终端 CRUD 路由 + 进程检测路由
-└── ws/
-    └── handler.go          # WebSocket 路由增加 tid 参数
+│   └── server.go          # +文件 API 路由和处理函数
+├── container/
+│   └── manager.go         # +GetCWD 方法
+└── fileutil/
+    └── fileutil.go        # 新增：路径安全、二进制检测、文件截断
 
 frontend/src/
+├── api.ts                 # +文件 API 调用函数
 ├── components/
-│   ├── TerminalTabBar.tsx  # 新增：终端标签栏（桌面+移动端共用）
-│   ├── ConfirmDialog.tsx   # 新增：关闭确认弹窗
-│   ├── SingleProjectView.tsx # 新增：单项目全屏视图
-│   ├── ProjectContainer.tsx  # 修改：集成标签栏
-│   ├── MobileProjectView.tsx # 修改：集成标签栏 + 7/3 布局
-│   ├── Terminal.tsx          # 修改：接受 terminalId prop
-│   └── ShortcutBar.tsx       # 修改：新增回车键
-├── App.tsx                   # 修改：布局切换 + 聚焦追踪
-└── api.ts                    # 新增终端 CRUD API 调用
+│   ├── FileTree.tsx        # 新增：文件树组件
+│   ├── FilePreview.tsx     # 新增：文件内容预览组件
+│   ├── FileBrowser.tsx     # 新增：桌面端文件浏览布局（树+内容+分割线）
+│   ├── MobileFileBrowser.tsx # 新增：手机端文件浏览（全屏导航）
+│   ├── ProjectContainer.tsx  # +模式切换
+│   ├── SingleProjectView.tsx # +模式切换
+│   └── MobileProjectView.tsx # +模式切换
+└── hooks/
+    └── useFileBrowser.ts   # 新增：文件浏览状态管理 hook
+
+frontend/
+├── e2e/                    # 新增：Playwright 测试目录
+│   ├── file-browser.spec.ts
+│   └── ...
+└── playwright.config.ts    # 新增：Playwright 配置
 ```
 
 ### 1.4 安全门控命令
 
-- 后端测试：`cd backend && go test ./...`
-- 前端测试：`cd frontend && npx vitest run`
-- 全量构建：`make build`
+| 检查项 | 命令 |
+|--------|------|
+| 后端编译 | `cd backend && PATH="/snap/go/current/bin:$PATH" go build ./...` |
+| 后端测试 | `cd backend && PATH="/snap/go/current/bin:$PATH" go test ./...` |
+| 前端类型检查 | `cd frontend && npx tsc --noEmit` |
+| 前端测试 | `cd frontend && npx vitest run` |
+| E2E 冒烟测试 | `cd frontend && npx playwright test` |
 
 ## 2. 开发阶段
 
-### 阶段 1：后端多终端基础
+### 阶段 1：终端功能更新
 
-**目标**：完成多终端的后端基础设施，包括数据模型、API、WebSocket 路由和数据迁移
+**目标**：修复终端关闭 Bug，移除终端数量上限
 
 **涉及的需求项**：
-- 2.1.2 新建终端（后端部分）
-- 2.1.3 关闭终端（后端部分：进程检测）
-- 2.1.4 多终端持久化（数据模型 + 迁移）
-- 2.1.5 多终端跨设备同步（后端广播）
-
-#### 工作项列表
-
-##### WI-1.1 [M] DB schema：terminals 表 + 数据迁移
-- **描述**：在 SQLite 中新增 `terminals` 表 `(id TEXT PK, container_id TEXT, name TEXT, is_default BOOL, sort_order INT, created_at DATETIME)`。启动时检测是否需要迁移：如果 terminals 表为空但存在旧格式日志文件 `{containerID}.log`，为每个容器自动创建默认终端记录，并将日志文件移动到 `{containerID}/{terminalID}.log` 子目录
-- **验收标准**：
-  1. 新建数据库时 terminals 表正确创建
-  2. 旧数据库升级时，每个容器自动生成一条 is_default=true 的终端记录
-  3. 旧日志文件迁移到新路径，原文件不残留
-  4. 安全门控：`cd backend && go test ./...` 通过
-- **Notes**：
-  - Pattern：SQLite `CREATE TABLE IF NOT EXISTS` + 检测迁移条件
-  - Reference：`backend/internal/store/store.go`（现有建表逻辑）
-  - Hook point：`store.New()` 初始化时执行迁移
-
-##### WI-1.2 [S] 测试：DB schema + 数据迁移
-- **描述**：为 WI-1.1 编写测试，覆盖新建库、旧库迁移、日志文件迁移三个场景
-- **验收标准**：
-  1. 测试新库 terminals 表结构正确
-  2. 测试旧库迁移后每个容器有一条默认终端记录
-  3. 测试日志文件从 `{cid}.log` 迁移到 `{cid}/{tid}.log`
-  4. 安全门控：`cd backend && go test ./...` 通过
-
-##### WI-1.3 [M] Terminal CRUD 数据访问层
-- **描述**：在 store 包新增 `terminal.go`，提供终端的 CRUD 操作：`CreateTerminal(containerID, name, isDefault) → Terminal`、`ListTerminals(containerID) → []Terminal`、`DeleteTerminal(id)`、`CountTerminals(containerID) → int`
-- **验收标准**：
-  1. CreateTerminal 正确插入记录，sort_order 自动递增
-  2. ListTerminals 按 sort_order 排序返回
-  3. DeleteTerminal 删除记录
-  4. CountTerminals 返回正确数量
-  5. 安全门控：`cd backend && go test ./...` 通过
-- **Notes**：
-  - Pattern：与现有 `store/todo.go` 风格一致
-  - Reference：`backend/internal/store/todo.go`
-  - Hook point：被 Manager 和 HTTP handler 调用
-
-##### WI-1.4 [S] 测试：Terminal CRUD 数据访问
-- **描述**：为 WI-1.3 的四个方法编写测试
-- **验收标准**：
-  1. 覆盖创建、列表、删除、计数四个操作
-  2. 测试边界：容器无终端时列表为空、删除不存在的记录不报错
-  3. 安全门控：`cd backend && go test ./...` 通过
-
-##### WI-1.5 [集成门控] DB 层集成验证
-- **描述**：验证 terminals 表 + CRUD + 迁移逻辑的集成状态
-- **验收标准**：
-  1. `cd backend && go test ./...` 全部通过
-  2. 手动验证：用旧版数据目录启动，迁移正确完成
-
-##### WI-1.6 [M] Container/Terminal 结构重构
-- **描述**：从 `Container` 中提取 `Terminal` 子结构到新文件 `container/terminal.go`。Terminal 持有 `session *ptypkg.Session`、`logFile *os.File`、`listeners map[*Listener]bool`。Container 改为持有 `terminals map[string]*Terminal`。更新 Manager 的 `Create()`、`Reopen()`、`Delete()` 方法适配多终端。`pumpOutput()` 绑定到 Terminal 级别
-- **验收标准**：
-  1. 每个容器创建时自动创建一个默认终端
-  2. Manager.Create() 返回的容器包含一个可用终端
-  3. Manager.Delete() 清理容器下所有终端的 session、logFile
-  4. pumpOutput() 在 Terminal 级别运行，输出写入对应终端的 logFile
-  5. 安全门控：`cd backend && go test ./...` 通过
-- **Notes**：
-  - Pattern：组合模式，Container 聚合 Terminal
-  - Reference：`backend/internal/container/manager.go`（现有 Container 结构）
-  - Hook point：所有使用 Container.session 的地方需改为通过 Terminal 访问
-
-##### WI-1.6b [S] 测试：Container/Terminal 结构重构
-- **描述**：为 WI-1.6 编写测试，验证 Container/Terminal 结构重构后的核心行为
-- **验收标准**：
-  1. 测试 Manager.Create() 创建的容器包含一个默认终端
-  2. 测试 Manager.Delete() 清理容器下所有终端的资源
-  3. 测试 pumpOutput() 输出写入对应终端的 logFile
-  4. 安全门控：`cd backend && go test ./...` 通过
-- **Notes**：
-  - Reference：`backend/internal/container/manager.go`、`terminal.go`
-  - Hook point：验证重构后与 WI-1.7 API 层的对接基础
-
-##### WI-1.7 [M] Terminal 级别 API + 进程检测
-- **描述**：新增 REST API：
-  - `GET /api/containers/{id}/terminals` — 列出终端
-  - `POST /api/containers/{id}/terminals` — 创建终端（检查上限 5）
-  - `DELETE /api/containers/{id}/terminals/{tid}` — 关闭终端（销毁 PTY + 删除记录 + 清理日志）
-  - `GET /api/containers/{id}/terminals/{tid}/has-process` — 检测子进程
-  
-  创建/删除终端后通过 `/ws/notify` 广播 `{"type":"terminals-changed","containerId":"..."}`
-- **验收标准**：
-  1. 列出终端返回正确列表
-  2. 创建终端成功，超过 5 个返回 400 错误
-  3. 删除终端销毁 PTY 会话并清理数据
-  4. 删除默认终端返回 400 错误
-  5. has-process 在有子进程时返回 true，无子进程时返回 false
-  6. 创建/删除后广播 terminals-changed 事件
-  7. 安全门控：`cd backend && go test ./...` 通过
-- **Notes**：
-  - Pattern：RESTful 嵌套资源，与现有 todos API 风格一致
-  - Reference：`backend/internal/server/server.go`（路由注册）
-  - Hook point：进程检测读取 `/proc/{pid}/children` 或遍历 `/proc/{pid}/task/*/children`
-
-##### WI-1.8 [S] 测试：Terminal API + 进程检测
-- **描述**：为 WI-1.7 编写测试，覆盖 CRUD 正常/异常路径和进程检测逻辑
-- **验收标准**：
-  1. 测试创建终端成功 + 上限拒绝
-  2. 测试删除普通终端成功 + 删除默认终端被拒绝
-  3. 测试进程检测的纯函数逻辑（mock /proc 读取）
-  4. 安全门控：`cd backend && go test ./...` 通过
-
-##### WI-1.9 [S] WebSocket 路由更新
-- **描述**：修改 `/ws/terminal` 路由，新增 `tid` 查询参数。根据 `id`（容器）和 `tid`（终端）定位到具体 Terminal 的 listeners。不传 tid 时默认连接容器的默认终端（向后兼容）。ReadHistory 根据终端类型使用不同行数上限（默认终端 1000 行，额外终端 200 行）
-- **验收标准**：
-  1. `?id=c-1&tid=t-1` 正确连接到容器 c-1 的终端 t-1
-  2. `?id=c-1`（无 tid）连接到默认终端
-  3. 默认终端恢复历史 1000 行，额外终端恢复 200 行
-  4. 多设备连接同一终端时，输出实时广播到所有 listeners
-  5. 安全门控：`cd backend && go test ./...` 通过
-- **Notes**：
-  - Pattern：查询参数路由
-  - Reference：`backend/internal/ws/handler.go`（现有 HandleTerminal）
-  - Hook point：`Terminal.listeners` 替代原 `Container.listeners`
-
-##### WI-1.10 [集成门控] 后端多终端完整验证
-- **描述**：验证阶段 1 所有工作项的集成状态
-- **验收标准**：
-  1. `cd backend && go test ./...` 全部通过
-  2. `make build` 构建成功
-  3. 手动验证：启动服务，通过 curl 创建终端、列出终端、连接 WebSocket、删除终端
-
-**阶段验收标准**：
-1. Given 旧版数据目录，When 新版启动，Then 数据迁移完成，每个容器有一个默认终端
-2. Given 一个容器，When 通过 API 创建 5 个终端后再创建，Then 返回 400
-3. Given 两个 WebSocket 客户端连接同一终端，When 一个客户端输入，Then 另一个客户端收到输出
-4. 所有安全门控通过
+- 2.1.1 关闭额外终端后未跳转到默认终端
+- 2.2.1 取消终端数量上限
 
 **阶段状态**：已完成
-**完成日期**：2026-04-16
 
----
-
-### 阶段 2：前端终端标签页
-
-**目标**：实现终端标签页 UI、新建/关闭终端、懒加载策略和跨设备同步
-
-**涉及的需求项**：
-- 2.1.1 终端标签页 UI
-- 2.1.2 新建终端（前端部分）
-- 2.1.3 关闭终端（前端部分 + 确认弹窗）
-- 2.1.5 多终端跨设备同步（前端部分）
-- 2.1.6 终端懒加载
-
-#### 工作项列表
-
-##### WI-2.1 [S] API 调用层 + 类型定义
-- **描述**：在 `api.ts` 中新增终端相关 API 调用函数：`listTerminals(containerID)`、`createTerminal(containerID)`、`deleteTerminal(containerID, terminalID)`、`hasProcess(containerID, terminalID)`。新增 TypeScript 类型 `TerminalInfo { id, containerID, name, isDefault, sortOrder, createdAt }`
+##### WI-1.1 [S] Bug 修复 — 关闭终端后自动跳转默认终端
+- **描述**：在 `useTerminalTabs` 添加 `useEffect` 守卫，当 `activeTerminalId` 指向不存在的终端时自动回退到默认终端
 - **验收标准**：
-  1. 类型定义完整，API 函数可正常调用
+  1. 关闭当前活动的额外终端后，自动切换到 Agent 标签
   2. 安全门控：`cd frontend && npx vitest run` 通过
 - **Notes**：
-  - Pattern：与现有 `createContainer()`、`listTodos()` 风格一致
-  - Reference：`frontend/src/api.ts`
-  - Hook point：被 TerminalTabBar 和容器组件调用
+  - Pattern：useEffect 守卫模式，监听 terminals + activeTerminalId 变化
+  - Reference：`frontend/src/hooks/useTerminalTabs.ts`
+  - Hook point：所有使用 useTerminalTabs 的组件自动受益
 
-##### WI-2.2 [M] TerminalTabBar 组件
-- **描述**：新建 `TerminalTabBar.tsx`，桌面端和移动端共用。Props：`terminals: TerminalInfo[]`、`activeId: string`、`onSelect(id)`、`onCreate()`、`onClose(id)`、`maxTerminals: number`。展示标签页列表 + "+"按钮 + "x"关闭按钮。默认终端不显示"x"。终端数达上限时隐藏"+"
+##### WI-1.2 [S] 移除终端数量上限
+- **描述**：移除后端 `CreateTerminal` 的 5 个终端限制检查，移除前端 `maxTerminals` prop，"+" 按钮始终可见
 - **验收标准**：
-  1. 标签页正确渲染，点击切换触发 onSelect
-  2. "+"按钮触发 onCreate，终端数达 5 时不显示
-  3. 默认终端不显示"x"，额外终端显示"x"
-  4. 安全门控：`cd frontend && npx vitest run` 通过
+  1. 可创建超过 5 个终端，"+" 按钮始终显示
+  2. 安全门控：`cd backend && PATH="/snap/go/current/bin:$PATH" go build ./...` + `cd frontend && npx vitest run` 通过
 - **Notes**：
-  - Pattern：受控组件，状态由父组件管理
-  - Reference：现有 `ShortcutBar.tsx` 的布局风格
-  - Hook point：嵌入 ProjectContainer 和 MobileProjectView
+  - Reference：`backend/internal/container/manager.go`、`frontend/src/components/TerminalTabBar.tsx`
+  - Hook point：`ErrTerminalLimit` 从 server.go 错误处理中移除
 
-##### WI-2.3 [S] 测试：TerminalTabBar
-- **描述**：为 TerminalTabBar 编写测试，覆盖渲染、切换、新建禁用、默认终端不可关闭
+##### WI-1.3 [集成门控] 终端功能验证
+- **描述**：验证 WI-1.1 ~ WI-1.2 的集成状态
 - **验收标准**：
-  1. 渲染正确数量的标签
-  2. 点击标签触发 onSelect
-  3. 5 个终端时"+"不显示
-  4. 默认终端无"x"按钮
-  5. 安全门控：`cd frontend && npx vitest run` 通过
-
-##### WI-2.4 [S] ConfirmDialog 组件
-- **描述**：新建通用确认弹窗组件 `ConfirmDialog.tsx`。Props：`open`、`title`、`message`、`onConfirm()`、`onCancel()`。用于关闭终端时的进程确认
-- **验收标准**：
-  1. open=true 时显示弹窗，false 时不渲染
-  2. 点击确认触发 onConfirm，点击取消触发 onCancel
-  3. 安全门控：`cd frontend && npx vitest run` 通过
-- **Notes**：
-  - Pattern：与现有 PasteModal 结构类似
-  - Reference：`frontend/src/components/PasteModal.tsx`
-
-##### WI-2.5 [集成门控] 基础组件验证
-- **描述**：验证 API 层 + TerminalTabBar + ConfirmDialog 组件的独立功能
-- **验收标准**：
-  1. `cd frontend && npx vitest run` 全部通过
-  2. 组件可独立渲染、事件回调正常
-
-##### WI-2.6 [M] 集成标签页到 ProjectContainer（桌面端）
-- **描述**：修改 `ProjectContainer.tsx`，新增终端列表状态管理。组件挂载时调用 `listTerminals()` 获取终端列表，渲染 TerminalTabBar。activeTerminalId 状态控制当前显示的终端。Terminal 组件接收 `terminalId` prop（新增），WebSocket 连接使用 `?id={cid}&tid={tid}`。新建终端调用 API 后刷新列表。关闭终端先调用 has-process，有进程则弹 ConfirmDialog
-- **验收标准**：
-  1. 容器渲染时显示终端标签栏和默认终端
-  2. 点击标签切换终端内容
-  3. "+"新建终端，API 调用成功后新标签出现并自动激活
-  4. "x"关闭终端，有进程时弹确认
-  5. 安全门控：`cd frontend && npx vitest run` 通过
-- **Notes**：
-  - Pattern：容器组件管理子终端状态
-  - Reference：`frontend/src/components/ProjectContainer.tsx`
-  - Hook point：Terminal.tsx 需增加 terminalId prop
-
-##### WI-2.6b [S] 测试：桌面端标签页集成
-- **描述**：为 WI-2.6 编写测试，验证桌面端 ProjectContainer 的标签页集成
-- **验收标准**：
-  1. 测试容器渲染时显示标签栏和默认终端
-  2. 测试点击标签切换 activeTerminalId
-  3. 测试"+"新建终端后自动激活新标签
-  4. 安全门控：`cd frontend && npx vitest run` 通过
-- **Notes**：
-  - Reference：`frontend/src/components/ProjectContainer.tsx`
-  - Hook point：验证桌面端集成后为移动端集成提供参照
-
-##### WI-2.7 [M] 集成标签页到 MobileProjectView（移动端）
-- **描述**：修改 `MobileProjectView.tsx`，与桌面端相同的终端列表管理逻辑。TerminalTabBar 放在终端区域顶部。ShortcutBar 的 `onSend` 需路由到当前激活终端的 `sendData`
-- **验收标准**：
-  1. 移动端显示终端标签栏
-  2. 标签切换、新建、关闭与桌面端行为一致
-  3. ShortcutBar 发送数据到当前激活终端
-  4. 安全门控：`cd frontend && npx vitest run` 通过
-- **Notes**：
-  - Reference：`frontend/src/components/MobileProjectView.tsx`
-  - Hook point：terminalRef 需按 activeTerminalId 动态绑定
-
-##### WI-2.8 [S] Terminal 组件适配 + 懒加载
-- **描述**：修改 `Terminal.tsx`，新增 `terminalId` prop，WebSocket URL 加 `&tid={terminalId}`。实现懒加载：组件接收 `active` prop，默认终端（isDefault=true）始终保持连接；额外终端仅在 active=true 时建立 WebSocket 连接，active=false 时断开并销毁 xterm 实例
-- **验收标准**：
-  1. terminalId 正确传入 WebSocket URL
-  2. 默认终端切换到其他标签后仍保持连接
-  3. 额外终端切换离开后断开连接
-  4. 额外终端切换回来后重新连接并加载历史
-  5. 安全门控：`cd frontend && npx vitest run` 通过
-- **Notes**：
-  - Pattern：条件渲染 + useEffect 依赖 active 状态
-  - Reference：`frontend/src/components/Terminal.tsx`（现有 WebSocket 逻辑）
-  - Hook point：active 变化触发 connect/disconnect
-
-##### WI-2.9 [S] 测试：标签页集成 + 懒加载
-- **描述**：为桌面端和移动端的标签页集成编写测试，验证懒加载行为
-- **验收标准**：
-  1. 测试默认终端始终渲染
-  2. 测试额外终端仅在激活时渲染
-  3. 安全门控：`cd frontend && npx vitest run` 通过
-
-##### WI-2.10 [S] 跨设备终端同步
-- **描述**：修改 `App.tsx` 和 `MobileApp.tsx` 中的 `/ws/notify` 处理逻辑，监听 `terminals-changed` 事件。收到事件后，通知对应容器组件刷新终端列表（类似现有 todoRefresh 机制，新增 terminalRefresh 计数器）
-- **验收标准**：
-  1. 设备 A 创建终端后，设备 B 的标签栏实时更新
-  2. 设备 A 关闭终端后，设备 B 的标签栏实时更新
-  3. 安全门控：`cd frontend && npx vitest run` 通过
-- **Notes**：
-  - Pattern：与现有 todos-updated 广播机制一致
-  - Reference：`frontend/src/App.tsx`（connectNotifyWS 函数）
-  - Hook point：新增 terminalRefresh 状态 + prop 传递
-
-##### WI-2.10b [S] 测试：跨设备终端同步
-- **描述**：为 WI-2.10 编写测试，验证 terminals-changed 事件处理逻辑
-- **验收标准**：
-  1. 测试 /ws/notify 收到 terminals-changed 后 terminalRefresh 计数器递增
-  2. 测试 terminalRefresh 变化触发终端列表重新加载
-  3. 安全门控：`cd frontend && npx vitest run` 通过
-- **Notes**：
-  - Reference：`frontend/src/App.tsx`、`MobileApp.tsx`
-  - Hook point：与现有 todoRefresh 测试模式一致
-
-##### WI-2.11 [集成门控] 前端多终端完整验证
-- **描述**：验证阶段 2 所有工作项的集成状态
-- **验收标准**：
-  1. `cd frontend && npx vitest run` 全部通过
-  2. `make build` 构建成功
-  3. 手动验证：桌面端和移动端创建/切换/关闭终端，跨设备同步正常
+  1. `cd backend && PATH="/snap/go/current/bin:$PATH" go build ./...` 通过
+  2. `cd frontend && npx vitest run` 通过
+  3. 手动验证：创建多个终端 → 关闭所有额外终端 → 自动跳到 Agent
 
 **阶段验收标准**：
-1. Given 桌面端打开一个项目，When 点击"+"创建 3 个终端并切换，Then 标签页切换流畅，终端内容独立
-2. Given 额外终端内运行进程，When 点击"x"关闭，Then 弹出确认对话框
-3. Given 设备 A 创建终端，When 设备 B 已连接，Then 设备 B 标签栏实时出现新标签
-4. Given 用户切换到额外终端再切回默认终端，When 切换完成，Then 默认终端立即显示（无加载延迟）
-5. 所有安全门控通过
-
-**阶段状态**：已完成
-**完成日期**：2026-04-16
+1. Given 用户创建 6+ 个终端，When 查看标签栏，Then "+" 按钮始终可见，标签栏可横向滚动
+2. Given 用户关闭所有额外终端，When 最后一个额外终端关闭，Then 自动切换到 Agent 标签
+3. 所有安全门控通过
 
 ---
 
-### 阶段 3：桌面端布局切换
+### 阶段 2：后端文件 API + 基础设施
 
-**目标**：实现多项目/单项目布局切换、项目导航和布局持久化
+**目标**：实现文件系统读取 API，搭建 E2E 测试基础设施
 
 **涉及的需求项**：
-- 2.2.1 布局切换按钮
-- 2.2.2 单项目模式
+- 2.3.1 模式切换（后端部分：CWD 获取）
+- 2.3.2 文件树（后端部分：目录列表）
+- 2.3.3~2.3.8 文件内容预览（后端部分：文件读取、截断、二进制检测）
 
-#### 工作项列表
-
-##### WI-3.1 [S] 布局模式状态 + localStorage 持久化
-- **描述**：在 `App.tsx` 中新增 `layoutMode` 状态（'multi' | 'single'），初始值从 localStorage 读取，默认 'multi'。变更时写入 localStorage。新增 `focusedContainerId` 状态，追踪最近一次获得终端焦点的容器 ID（通过终端区域的 onFocus/onClick 事件更新）
+##### WI-2.1 [S] 文件工具包 — 路径安全 + 二进制检测 + 文件截断
+- **描述**：新建 `backend/internal/fileutil/fileutil.go`，实现：
+  - `SafeJoin(base, rel) (string, error)` — 路径拼接+遍历防护（Clean → 检查 `..` 越界 → EvalSymlinks 后二次验证仍在 base 内）
+  - `IsBinary(path) bool` — 读取前 512 字节检测是否包含 NUL 字节
+  - `ReadTailLines(path, maxLines) (string, truncated bool, error)` — 读取文件最后 N 行
+  - `FileType(name) string` — 根据扩展名返回类型（text/markdown/image/pdf/binary）
 - **验收标准**：
-  1. 刷新页面后 layoutMode 保持
-  2. focusedContainerId 在点击/操作终端时正确更新
-  3. 安全门控：`cd frontend && npx vitest run` 通过
+  1. `SafeJoin("/base", "../etc/passwd")` 返回错误
+  2. `SafeJoin("/base", "sub/file.go")` 返回 `/base/sub/file.go`
+  3. 二进制文件检测正确识别 ELF/ZIP 等格式
+  4. `ReadTailLines` 对超限文件只返回最后 N 行
+  5. 安全门控：`go test ./internal/fileutil/...` 通过
 - **Notes**：
-  - Pattern：useState + useEffect(localStorage)
-  - Reference：`frontend/src/App.tsx`
-  - Hook point：layoutMode 决定渲染 Grid 还是 SingleProjectView
+  - Pattern：独立工具包，无外部依赖
+  - Reference：类似 `filepath.Clean` + `strings.Contains` 检查
+  - Hook point：被 server.go 文件处理函数调用
 
-##### WI-3.2 [S] 布局切换按钮 UI
-- **描述**：在 App.tsx 顶部栏添加布局切换按钮（图标式：网格图标 ↔ 全屏图标）。点击时切换 layoutMode。切换到单项目模式时，使用 focusedContainerId 确定显示哪个项目（未聚焦则默认第一个）
+##### WI-2.2 [S] 后端测试 — fileutil 单元测试
+- **描述**：为 fileutil 包编写单元测试，覆盖路径遍历攻击、二进制检测、大文件截断等边界情况
 - **验收标准**：
-  1. 按钮可见，图标反映当前模式
-  2. 点击切换布局模式
-  3. 切换到单项目模式时显示正确的项目
-  4. 安全门控：`cd frontend && npx vitest run` 通过
+  1. 路径遍历测试：`..`、符号链接、绝对路径注入
+  2. 二进制检测：文本文件、二进制文件、空文件
+  3. 截断测试：小于限制、等于限制、超过限制
+  4. 安全门控：`go test ./internal/fileutil/...` 通过
 - **Notes**：
-  - Reference：App.tsx 顶部栏区域
+  - Pattern：表驱动测试（table-driven tests）
+  - Reference：`backend/internal/store/terminal_test.go` 作为测试风格参考
 
-##### WI-3.2b [S] 测试：布局状态 + 切换按钮
-- **描述**：为 WI-3.1 和 WI-3.2 编写测试，验证布局模式状态管理和切换按钮
+##### WI-2.3 [M] CWD + 目录列表 + 文件内容 API
+- **描述**：在 server.go 中新增三个 API 端点：
+  - `GET /api/containers/{id}/cwd` — 通过 `/proc/{pid}/cwd` 读取 Agent 终端的 CWD
+  - `GET /api/containers/{id}/files?path=.` — 列出指定目录的内容（单层），返回 `[{name, type, size}]`，目录排在文件前面
+  - `GET /api/containers/{id}/files/content?path=xxx` — 读取文件内容：
+    - 文本/代码：返回 `{type: "text", content: "...", truncated: bool, language: "go"}`
+    - Markdown：返回 `{type: "markdown", content: "..."}`
+    - 图片：返回 `{type: "image", content: "base64...", mimeType: "image/png"}`
+    - PDF：返回 `{type: "pdf", content: "base64..."}`
+    - 二进制：返回 `{type: "binary"}`
+  - Manager 新增 `GetCWD(containerID) (string, error)` 方法
 - **验收标准**：
-  1. 测试 layoutMode 在 localStorage 中的读写和初始化
-  2. 测试切换按钮点击后 layoutMode 变化
-  3. 测试 focusedContainerId 更新逻辑
-  4. 安全门控：`cd frontend && npx vitest run` 通过
+  1. CWD API 返回 Agent 终端的当前工作目录
+  2. 目录列表返回正确的文件和子目录信息
+  3. 路径参数经过 SafeJoin 安全检查
+  4. 大文件自动截断，返回 truncated=true
+  5. 二进制文件返回 type="binary"，不返回内容
+  6. 安全门控：`cd backend && PATH="/snap/go/current/bin:$PATH" go build ./...` + `cd backend && PATH="/snap/go/current/bin:$PATH" go test ./...` 通过
 - **Notes**：
-  - Reference：`frontend/src/App.tsx`
-  - Hook point：验证状态管理后为 SingleProjectView 提供基础
+  - Pattern：与 terminal API 相同的路由解析模式（SplitN + HasSuffix）
+  - Reference：`server.go` 中 `listTerminals`/`createTerminalHandler` 作为模板
+  - Hook point：`Manager.GetCWD` 调用 `Terminal.ProcessPID()` → 读取 `/proc/{pid}/cwd`
 
-##### WI-3.3 [M] SingleProjectView 单项目视图
-- **描述**：新建 `SingleProjectView.tsx`，占满页面主区域。顶部标题栏：左箭头 + 项目名称 + 右箭头。下方：待办列表（左）+ 终端标签页和终端（右），复用现有 ProjectContainer 的布局逻辑（分割线可拖拽）。Props：`container`、`containers`（全部容器列表，用于导航）、`onNavigate(containerId)`、相关回调
+##### WI-2.4 [S] 后端测试 — 文件 API 测试
+- **描述**：为文件 API 编写测试，使用临时目录作为测试文件系统
 - **验收标准**：
-  1. 项目占满页面主区域
-  2. 标题栏显示项目名称和左右箭头
-  3. 待办列表可见，终端标签页可切换
-  4. 分割线可拖拽调整比例
-  5. 安全门控：`cd frontend && npx vitest run` 通过
+  1. CWD 获取测试（mock /proc 或集成测试）
+  2. 目录列表：空目录、含文件目录、隐藏文件
+  3. 文件内容：文本、markdown、二进制、大文件截断
+  4. 路径遍历尝试返回 400 错误
+  5. 安全门控：`cd backend && PATH="/snap/go/current/bin:$PATH" go test ./...` 通过
 - **Notes**：
-  - Pattern：复用 ProjectContainer 内部布局，外层全屏包装
-  - Reference：`frontend/src/components/ProjectContainer.tsx`
-  - Hook point：嵌入 App.tsx，layoutMode === 'single' 时渲染
-
-##### WI-3.4 [S] 项目导航 + 快捷键适配
-- **描述**：SingleProjectView 标题栏左右箭头点击时切换到上/下一个项目。第一个项目左箭头禁用，最后一个右箭头禁用。修改 App.tsx 中的 Ctrl+←/→ 快捷键逻辑：多项目模式下切换页面（不变），单项目模式下切换项目
-- **验收标准**：
-  1. 点击左右箭头正确切换项目
-  2. 边界项目时箭头禁用
-  3. Ctrl+←/→ 在单项目模式下切换项目
-  4. Ctrl+←/→ 在多项目模式下仍切换页面
-  5. 安全门控：`cd frontend && npx vitest run` 通过
+  - Pattern：httptest.NewServer + 临时目录
+  - Reference：`backend/internal/server/server_test.go`
+  - Hook point：验证 fileutil + server handler 集成正确性
 - **Notes**：
-  - Reference：`frontend/src/App.tsx`（现有 handleKeyDown）
-  - Hook point：layoutMode 条件分支快捷键行为
+  - Pattern：httptest.NewServer + 临时目录
+  - Reference：`backend/internal/server/server_test.go`
 
-##### WI-3.5 [S] 测试：单项目视图 + 导航
-- **描述**：为 WI-3.3 和 WI-3.4 编写测试，验证单项目视图渲染和项目导航
+##### WI-2.5 [集成门控] 后端文件 API 集成验证
+- **描述**：验证 WI-2.1 ~ WI-2.4 的集成状态
 - **验收标准**：
-  1. 测试 SingleProjectView 占满主区域，标题栏显示项目名
-  2. 测试导航边界（第一个项目左箭头禁用，最后一个右箭头禁用）
-  3. 测试 Ctrl+←/→ 在单项目模式下切换项目
-  4. 安全门控：`cd frontend && npx vitest run` 通过
+  1. `cd backend && PATH="/snap/go/current/bin:$PATH" go build ./...` 通过
+  2. `cd backend && PATH="/snap/go/current/bin:$PATH" go test ./...` 通过
+  3. 手动 curl 验证：CWD → 目录列表 → 文件内容 完整链路
+
+##### WI-2.6 [M] Playwright 基础设施搭建
+- **描述**：在 frontend 目录下安装和配置 Playwright：
+  - `npm install -D @playwright/test`
+  - 创建 `playwright.config.ts`（baseURL 指向 localhost:8090）
+  - 创建 `e2e/` 目录 + 示例冒烟测试（验证首页加载）
+  - 在 package.json 中添加 `test:e2e` 脚本
+- **验收标准**：
+  1. `npx playwright test` 能正常运行（需要后端服务启动）
+  2. 示例测试验证页面标题或容器列表加载
+  3. Playwright 配置包含超时、重试、截图等基本设置
+  4. 安全门控：`cd frontend && npx playwright test` 通过
 - **Notes**：
-  - Reference：`frontend/src/components/SingleProjectView.tsx`
-  - Hook point：验证导航逻辑与快捷键适配
-
-##### WI-3.6 [集成门控] 桌面布局完整验证
-- **描述**：验证阶段 3 所有工作项的集成状态
-- **验收标准**：
-  1. `cd frontend && npx vitest run` 全部通过
-  2. `make build` 构建成功
-  3. 手动验证：切换布局、导航项目、快捷键、刷新后持久化
+  - Pattern：Playwright 标准项目结构
+  - Reference：https://playwright.dev/docs/intro
+  - Hook point：后续阶段的 E2E 测试基于此基础设施
 
 **阶段验收标准**：
-1. Given 多项目模式，When 点击布局切换按钮，Then 切换到单项目模式，显示当前聚焦项目
-2. Given 单项目模式显示第一个项目，When 点击左箭头，Then 箭头禁用无响应
-3. Given 用户切换到单项目模式后刷新页面，When 页面加载，Then 仍为单项目模式
-4. Given 单项目模式，When 按 Ctrl+→，Then 切换到下一个项目
-5. 所有安全门控通过
-
-**阶段状态**：未开始
+1. Given 后端运行中，When `curl /api/containers/{id}/cwd`，Then 返回 Agent 终端的当前工作目录
+2. Given 后端运行中，When `curl /api/containers/{id}/files?path=.`，Then 返回目录内容列表
+3. Given 路径含 `..`，When 请求文件 API，Then 返回 400 错误
+4. Given 二进制文件，When 请求文件内容，Then 返回 `{type: "binary"}`
+5. 所有后端测试通过，Playwright 示例测试通过
 
 ---
 
-### 阶段 4：移动端增强
+### 阶段 3：前端文件浏览（桌面端）
 
-**目标**：优化移动端布局并增强快捷键栏
+**目标**：实现桌面端完整的文件浏览体验
 
 **涉及的需求项**：
-- 2.3.1 移动端 7/3 布局
-- 2.4.1 新增回车键
+- 2.3.1 模式切换（前端部分）
+- 2.3.2 文件树
+- 2.3.3 代码语法高亮
+- 2.3.4 Markdown 渲染
+- 2.3.5 图片预览
+- 2.3.6 PDF 预览
+- 2.3.7 二进制文件提示
+- 2.3.8 大文件截断
+- 2.3.9 桌面端布局
 
-#### 工作项列表
-
-##### WI-4.1 [M] 移动端 7/3 布局 + 拖动分割线
-- **描述**：修改 `MobileProjectView.tsx` 布局：终端区域（含标签栏 + 终端 + 快捷键栏）在上，待办列表在下。默认比例 7:3。支持拖动分割线调整，终端区域最小 40%，待办区域最小 15%。分割线使用水平拖拽手柄
+##### WI-3.1 [S] 前端依赖安装 + API 函数
+- **描述**：
+  - 安装依赖：`shiki`, `react-markdown`, `remark-gfm`, `@tailwindcss/typography`, `react-pdf`
+  - 在 `api.ts` 中添加文件 API 调用函数：`getCWD`, `listFiles`, `getFileContent`
+  - 定义 TypeScript 类型：`FileEntry`, `FileContent`
 - **验收标准**：
-  1. 页面加载时终端在上占 70%，待办在下占 30%
-  2. 拖动分割线可调整比例
-  3. 终端区域不小于 40%，待办区域不小于 15%
-  4. 快捷键栏和终端标签栏在终端区域内
+  1. 依赖安装成功，无版本冲突
+  2. API 函数类型正确
+  3. 安全门控：`npx tsc --noEmit` 通过
+- **Notes**：
+  - Reference：`api.ts` 中现有函数模式（authHeaders、错误处理）
+  - Hook point：被 useFileBrowser hook 和组件使用
+
+##### WI-3.2 [M] 文件树组件
+- **描述**：实现 `FileTree.tsx`：
+  - 懒加载：展开目录时调用 `listFiles` API 获取子内容
+  - 展开/折叠：点击目录切换展开状态
+  - 现代化风格：文件/目录图标（lucide-react）、缩进层级线、选中高亮
+  - 目录排在文件前面，按名称排序
+  - 加载中状态：展开目录时显示 loading indicator
+- **验收标准**：
+  1. 目录点击展开/折叠正常
+  2. 文件点击触发 `onSelect(path)` 回调
+  3. 嵌套目录正确缩进
+  4. 文件/目录有对应图标
+  5. 安全门控：`npx tsc --noEmit` 通过
+- **Notes**：
+  - Pattern：递归组件，每个节点管理自己的 children 状态
+  - Reference：lucide-react 图标（Folder, FolderOpen, File, FileText 等）
+  - Hook point：被 FileBrowser 和 MobileFileBrowser 使用
+
+##### WI-3.3 [S] 文件树搜索/过滤
+- **描述**：在文件树顶部添加搜索输入框：
+  - 输入关键字实时过滤当前已加载的文件/目录
+  - 匹配项高亮显示
+  - 清空搜索恢复完整树
+- **验收标准**：
+  1. 输入关键字后，只显示名称匹配的文件/目录及其父目录链
+  2. 匹配文本高亮
+  3. 清空输入恢复完整树
+  4. 安全门控：`npx tsc --noEmit` 通过
+- **Notes**：
+  - Pattern：受控输入 + 过滤逻辑
+  - Reference：FileTree 组件内部状态
+
+##### WI-3.4 [S] 前端测试 — 文件树组件
+- **描述**：为 FileTree 编写 Vitest 测试（mock API 调用）
+- **验收标准**：
+  1. 渲染目录和文件节点
+  2. 点击目录触发展开（验证 API 调用）
+  3. 搜索过滤正确
+  4. 安全门控：`cd frontend && npx vitest run` 通过
+- **Notes**：
+  - Pattern：vi.mock api 模块，验证异步展开和过滤逻辑
+  - Reference：`frontend/src/components/__tests__/TerminalTabBar.test.tsx` 作为测试风格参考
+  - Hook point：确保文件树组件独立于后端可测试
+
+##### WI-3.5 [集成门控] 文件树集成验证
+- **描述**：验证 WI-3.1 ~ WI-3.4 的集成状态
+- **验收标准**：
+  1. `cd frontend && npx tsc --noEmit` 通过
+  2. `cd frontend && npx vitest run` 通过
+  3. API 类型与后端响应格式匹配
+
+##### WI-3.6 [M] 文件内容预览 — 代码语法高亮 (Shiki)
+- **描述**：实现 `FilePreview.tsx` 的代码预览部分：
+  - Shiki 异步加载（`createHighlighter`），使用暗色主题（如 `github-dark`）
+  - 根据文件扩展名选择语言
+  - 显示行号
+  - 大文件截断提示（顶部 banner）
+  - 加载中状态（Shiki 初始化 + 文件内容加载）
+- **验收标准**：
+  1. `.go`, `.ts`, `.py` 等文件正确高亮
+  2. 行号显示
+  3. 截断文件顶部显示提示信息
+  4. Shiki 加载完成前显示 loading 状态
+  5. 安全门控：`npx tsc --noEmit` 通过
+- **Notes**：
+  - Pattern：useEffect + useState 异步初始化 Shiki highlighter，全局单例
+  - Reference：Shiki docs — `createHighlighter({ themes, langs })`
+  - Hook point：FilePreview 根据 FileContent.type 分发到不同渲染器
+
+##### WI-3.7 [M] 文件内容预览 — Markdown + 图片 + PDF + 二进制
+- **描述**：在 `FilePreview.tsx` 中实现剩余预览类型：
+  - Markdown：react-markdown + remark-gfm，prose 排版，暗色主题适配
+  - 图片：`<img>` 标签，居中显示，最大宽度限制
+  - PDF：react-pdf `<Document>` + `<Page>` 组件，支持翻页
+  - 二进制：居中提示"不支持预览此文件类型"
+  - 无文件选中：空状态提示"选择文件以预览"
+- **验收标准**：
+  1. Markdown 表格和复选框正确渲染
+  2. 图片正常显示
+  3. PDF 正常显示，可翻页
+  4. 二进制文件显示不支持提示
+  5. 安全门控：`npx tsc --noEmit` 通过
+- **Notes**：
+  - Pattern：条件渲染 switch on content.type
+  - Reference：react-markdown, react-pdf 官方文档
+  - Hook point：@tailwindcss/typography 的 `prose prose-invert` 类用于 Markdown
+
+##### WI-3.8 [S] 前端测试 — 文件预览组件
+- **描述**：为 FilePreview 编写 Vitest 测试（mock Shiki、react-pdf）
+- **验收标准**：
+  1. 代码文件渲染高亮内容
+  2. Markdown 渲染为富文本
+  3. 二进制文件显示提示
+  4. 截断文件显示提示 banner
   5. 安全门控：`cd frontend && npx vitest run` 通过
 - **Notes**：
-  - Pattern：与桌面端 ProjectContainer 的 split 逻辑类似，改为上下方向
-  - Reference：`frontend/src/components/MobileProjectView.tsx`、`ProjectContainer.tsx`（分割线逻辑）
-  - Hook point：touchmove 事件处理，需与 Swiper 隔离（现有 stopPropagation 方案）
+  - Pattern：vi.mock shiki 和 react-pdf 模块，验证条件渲染分支
+  - Reference：`frontend/src/components/__tests__/TerminalTabBar.test.tsx` 作为测试风格参考
+  - Hook point：确保各预览类型的渲染路径正确
 
-##### WI-4.2 [S] 测试：移动端布局
-- **描述**：为移动端 7/3 布局编写测试
+##### WI-3.9 [集成门控] 文件预览集成验证
+- **描述**：验证 WI-3.6 ~ WI-3.8 的集成状态
 - **验收标准**：
-  1. 测试默认比例为 70%
-  2. 测试终端区域最小 40%、待办最小 15% 的约束
-  3. 安全门控：`cd frontend && npx vitest run` 通过
+  1. `cd frontend && npx tsc --noEmit` 通过
+  2. `cd frontend && npx vitest run` 通过
 
-##### WI-4.3 [S] 快捷键栏新增回车键
-- **描述**：在 `ShortcutBar.tsx` 的快捷键列表中新增回车键按钮 `{label: 'Enter', value: '\r'}`
+##### WI-3.10 [M] 桌面端文件浏览布局 + 模式切换
+- **描述**：
+  - 实现 `FileBrowser.tsx`：左侧 FileTree + 可拖拽分割线 + 右侧 FilePreview
+  - 实现 `useFileBrowser.ts` hook：管理 rootPath、selectedFile、fileContent 状态，内存缓存已加载的文件内容（避免重复请求同一文件）
+  - 在 ProjectContainer 和 SingleProjectView 的标题栏添加模式切换按钮（图标：FolderOpen ↔ Terminal）
+  - 切换时调用 getCWD API 设置文件树根路径
+  - 模式切换不销毁终端组件（display: none 隐藏）
 - **验收标准**：
-  1. 快捷键栏显示 Enter 按钮
-  2. 点击发送 `\r` 到终端
-  3. 安全门控：`cd frontend && npx vitest run` 通过
+  1. 标题栏显示模式切换按钮
+  2. 点击切换按钮在 Todo+终端 和 文件浏览 间切换
+  3. 文件浏览模式：左侧文件树 + 右侧内容，可拖拽调整比例
+  4. 切回终端模式时，终端状态完整保留
+  5. 多项目和单项目布局均正常
+  6. 安全门控：`npx tsc --noEmit` + `npx vitest run` 通过
 - **Notes**：
-  - Reference：`frontend/src/components/ShortcutBar.tsx`
-  - Hook point：添加到 shortcuts 数组
+  - Pattern：与现有 TodoList+Terminal 分割线相同的拖拽模式
+  - Reference：`ProjectContainer.tsx` 中的 Splitter 实现
+  - Hook point：容器组件通过 viewMode state 控制显示哪个视图
 
-##### WI-4.4 [S] 测试：回车键
-- **描述**：为回车键按钮编写测试
+##### WI-3.11 [S] 前端测试 — 模式切换与文件浏览布局
+- **描述**：为模式切换和 FileBrowser 布局编写 Vitest 测试（mock API 调用）
 - **验收标准**：
-  1. 测试 Enter 按钮存在且点击发送 `\r`
-  2. 安全门控：`cd frontend && npx vitest run` 通过
+  1. 切换按钮点击后视图模式变化
+  2. FileBrowser 渲染文件树和预览区域
+  3. 切回终端模式后终端组件仍在 DOM 中（display: none）
+  4. 安全门控：`cd frontend && npx vitest run` 通过
+- **Notes**：
+  - Pattern：vi.mock api 模块，验证 viewMode 状态切换
+  - Reference：`ProjectContainer.tsx`、`SingleProjectView.tsx`
+  - Hook point：验证模式切换不破坏终端连接
 
-##### WI-4.5 [集成门控] 移动端增强完整验证
-- **描述**：验证阶段 4 所有工作项的集成状态
+##### WI-3.12 [集成门控] 桌面端文件浏览完整验证
+- **描述**：验证阶段 3 的完整集成状态
 - **验收标准**：
-  1. `cd frontend && npx vitest run` 全部通过
-  2. `make build` 构建成功
-  3. 手动验证：移动端布局比例、分割线拖动、回车键功能
+  1. 所有安全门控命令通过
+  2. 启动开发服务器，手动验证完整流程：切换模式 → 文件树加载 → 展开目录 → 点击文件 → 内容预览（代码/Markdown/图片）
+  3. 多项目模式和单项目模式均正常
 
 **阶段验收标准**：
-1. Given 移动端访问，When 页面加载，Then 终端区域在上约占 70%，待办在下约占 30%
-2. Given 移动端页面已加载，When 拖动分割线到极限，Then 终端最小 40%，待办最小 15%
-3. Given 移动端快捷键栏可见，When 点击 Enter 按钮，Then 终端收到回车输入
-4. 所有安全门控通过
+1. Given 桌面端容器处于 Todo+终端 模式，When 点击标题栏切换按钮，Then 切换到文件浏览模式，文件树加载当前工作目录
+2. Given 文件浏览模式中，When 展开目录并点击 `.go` 文件，Then 右侧显示语法高亮的代码
+3. Given 文件浏览模式中，When 点击 `README.md`，Then 右侧渲染 Markdown（含表格和复选框）
+4. Given 文件浏览模式中，When 点击图片文件，Then 右侧显示图片
+5. Given 文件浏览模式中，When 在搜索框输入关键字，Then 文件树过滤显示匹配项
+6. Given 文件浏览模式中，When 切回 Todo+终端，Then 终端连接和状态完整保留
+7. 所有安全门控和集成门控通过
 
-**阶段状态**：未开始
+---
+
+### 阶段 4：手机端适配 + E2E 测试
+
+**目标**：实现手机端文件浏览交互，编写 E2E 冒烟测试
+
+**涉及的需求项**：
+- 2.3.10 手机端交互
+
+##### WI-4.1 [M] 手机端文件浏览组件
+- **描述**：实现 `MobileFileBrowser.tsx`：
+  - 两个全屏视图：文件树视图 + 文件内容视图
+  - 文件树视图：全屏显示文件树 + 搜索框，点击文件进入内容视图
+  - 文件内容视图：顶部标题栏（返回按钮 + 文件名），下方显示 FilePreview
+  - 视图切换动画（左右滑动）
+- **验收标准**：
+  1. 切换到文件浏览模式后显示全屏文件树
+  2. 点击文件进入全屏内容视图
+  3. 返回按钮回到文件树
+  4. 文件树搜索在手机端正常工作
+  5. 安全门控：`npx tsc --noEmit` 通过
+- **Notes**：
+  - Pattern：内部 state 控制 view（'tree' | 'preview'）
+  - Reference：MobileProjectView.tsx 的导航模式
+  - Hook point：在 MobileProjectView 中通过模式切换按钮集成
+
+##### WI-4.2 [S] 手机端模式切换集成
+- **描述**：在 MobileProjectView 标题栏添加模式切换按钮，集成 MobileFileBrowser
+- **验收标准**：
+  1. 手机端标题栏显示模式切换按钮
+  2. 切换到文件浏览模式正常工作
+  3. 切回终端模式时终端状态保留
+  4. 安全门控：`npx tsc --noEmit` + `npx vitest run` 通过
+- **Notes**：
+  - Reference：`MobileProjectView.tsx`
+  - Hook point：viewMode state 控制显示 Terminal+Todo 还是 MobileFileBrowser
+
+##### WI-4.3 [集成门控] 手机端集成验证
+- **描述**：验证 WI-4.1 ~ WI-4.2 的集成状态
+- **验收标准**：
+  1. 所有安全门控通过
+  2. 浏览器移动端模拟下验证完整流程
+
+##### WI-4.4 [M] E2E 冒烟测试
+- **描述**：编写 Playwright E2E 测试覆盖核心路径：
+  - 测试 1：桌面端模式切换 — 点击切换按钮 → 文件树出现 → 切回终端
+  - 测试 2：文件浏览完整流程 — 切换模式 → 展开目录 → 点击文件 → 内容显示
+  - 测试 3：手机端文件浏览 — 切换模式 → 点击文件 → 内容显示 → 返回
+  - 测试 4：终端标签关闭回退 — 创建终端 → 关闭 → 回到 Agent
+- **验收标准**：
+  1. 所有 E2E 测试通过
+  2. 安全门控：`cd frontend && npx playwright test` 通过
+- **Notes**：
+  - Pattern：Page Object Model 或直接 locator 方式
+  - Reference：`frontend/e2e/` 目录（阶段 2 搭建）
+
+##### WI-4.5 [集成门控] 全项目最终验证
+- **描述**：全量安全门控 + E2E 测试
+- **验收标准**：
+  1. `cd backend && PATH="/snap/go/current/bin:$PATH" go build ./...` 通过
+  2. `cd backend && PATH="/snap/go/current/bin:$PATH" go test ./...` 通过
+  3. `cd frontend && npx tsc --noEmit` 通过
+  4. `cd frontend && npx vitest run` 通过
+  5. `cd frontend && npx playwright test` 通过
+
+**阶段验收标准**：
+1. Given 手机端容器，When 点击模式切换，Then 显示全屏文件树
+2. Given 手机端文件树，When 点击文件，Then 进入全屏内容视图，顶部有返回按钮
+3. Given 手机端内容视图，When 点击返回，Then 回到文件树
+4. 所有 E2E 冒烟测试通过
+5. 所有安全门控通过
 
 ---
 
@@ -545,41 +502,42 @@ frontend/src/
 
 | 风险 | 影响 | 概率 | 应对措施 |
 |------|------|------|----------|
-| 多终端 WebSocket 并发导致资源消耗增大 | 性能下降 | 低 | 懒加载策略限制同时连接数；默认终端常驻，额外终端按需连接 |
-| 旧数据迁移失败（日志文件损坏或权限问题） | 数据丢失 | 低 | 迁移前备份日志文件；迁移失败记录日志但不阻塞启动 |
-| 进程检测 /proc 在不同 Linux 发行版上行为差异 | 关闭确认不准确 | 中 | 使用 `os.FindProcess` + `/proc/{pid}/children` 双重检测；检测失败时默认弹确认 |
-| 移动端拖动分割线与 Swiper 手势冲突 | 交互异常 | 中 | 复用现有 stopPropagation 隔离方案；分割线区域设置 `touch-action: none` |
-| 单项目模式下 Terminal resize 事件触发时机 | 终端尺寸错误 | 低 | 复用现有 requestAnimationFrame 延迟方案 |
+| Shiki 体积过大影响首屏加载 | 中 | 中 | 异步加载，仅在进入文件浏览模式时初始化；按需加载语言包 |
+| 大目录（node_modules）展开慢 | 中 | 高 | 后端单层懒加载，前端展开时显示 loading；后端限制单次返回条目数 |
+| /proc/{pid}/cwd 权限问题 | 高 | 低 | 使用与 PTY 相同的用户身份读取；权限不足时返回默认路径 |
+| react-pdf worker 配置复杂 | 低 | 中 | 使用 CDN worker 或内联 worker |
+| E2E 测试环境不稳定 | 低 | 中 | 设置合理的超时和重试策略 |
+| 符号链接绕过路径遍历防护 | 高 | 低 | SafeJoin 中 EvalSymlinks 后二次验证结果路径仍在 base 目录内 |
+| 并发读写冲突（Agent 写入中读取文件） | 低 | 中 | 读取失败时优雅降级，显示"文件读取失败"提示而非崩溃 |
 
 ## 4. 开发规范
 
 ### 4.1 代码规范
-- Go：标准 gofmt 格式化，导出函数必须有注释
-- TypeScript：项目现有 ESLint 配置
-- 新组件使用函数式组件 + hooks
-- 样式使用 Tailwind CSS utility classes
+- 后端 Go 标准格式化（gofmt）
+- 前端 TypeScript 严格模式
+- 新文件遵循现有项目风格和命名约定
 
 ### 4.2 Git 规范
-- 分支：从 main 创建 `dev/multi-terminal` 分支
-- 提交：每个阶段完成后提交一次，提交信息使用中文
+- 分支：`dev/file-browser`
+- 提交信息：中文，每阶段完成后提交
 - Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 ### 4.3 文档规范
-- 代码注释：仅在逻辑不自明处添加
-- API 变更：更新 README 的 CLI 命令一览（如有变化）
+- README 在功能完成后更新
+- 代码注释仅在逻辑不自明处添加
 
 ## 5. 工作项统计
 
 | 阶段 | S | M | 集成门控 | 总计 |
 |------|---|---|---------|------|
-| 阶段 1：后端多终端基础 | 5 | 3 | 2 | 10 |
-| 阶段 2：前端终端标签页 | 7 | 3 | 2 | 12 |
-| 阶段 3：桌面端布局切换 | 5 | 1 | 1 | 7 |
-| 阶段 4：移动端增强 | 3 | 1 | 1 | 5 |
-| **合计** | **20** | **8** | **6** | **34** |
+| 阶段 1 | 2 | 0 | 1 | 3 |
+| 阶段 2 | 3 | 2 | 1 | 6 |
+| 阶段 3 | 5 | 3 | 3 | 11 |
+| 阶段 4 | 1 | 2 | 2 | 5 |
+| **合计** | **11** | **7** | **7** | **25** |
 
 ## 审核记录
 
 | 日期 | 审核人 | 评分 | 结果 | 备注 |
 |------|--------|------|------|------|
-| 2026-04-16 | AI Assistant | 88/100 → 95/100 | 通过 | 插入 4 个测试项修复测试交织问题（WI-1.6b、WI-2.6b、WI-2.10b、WI-3.2b） |
+| 2026-04-16 | AI Assistant | 96/100 | 通过 | v1.0→v1.1：补充 WI-3.11 测试、完善 Notes 和安全门控命令、新增符号链接和并发读写风险、添加文件内容缓存策略 |

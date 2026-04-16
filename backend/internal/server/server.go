@@ -515,8 +515,6 @@ func createTerminalHandler(mgr *container.Manager, containerID string, w http.Re
 	term, err := mgr.CreateTerminal(containerID)
 	if err != nil {
 		switch {
-		case errors.Is(err, container.ErrTerminalLimit):
-			http.Error(w, err.Error(), http.StatusBadRequest)
 		case errors.Is(err, container.ErrContainerNotFound):
 			http.Error(w, err.Error(), http.StatusNotFound)
 		default:

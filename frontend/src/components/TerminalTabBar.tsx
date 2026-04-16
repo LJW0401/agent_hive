@@ -7,7 +7,6 @@ interface TerminalTabBarProps {
   onSelect: (id: string) => void
   onCreate: () => void
   onClose: (id: string) => void
-  maxTerminals?: number
 }
 
 export default function TerminalTabBar({
@@ -16,7 +15,6 @@ export default function TerminalTabBar({
   onSelect,
   onCreate,
   onClose,
-  maxTerminals = 5,
 }: TerminalTabBarProps) {
   return (
     <div className="flex items-center gap-0.5 px-1 py-0.5 bg-[#0c0c0e] border-b border-gray-800 overflow-x-auto shrink-0">
@@ -45,15 +43,13 @@ export default function TerminalTabBar({
           )}
         </button>
       ))}
-      {terminals.length < maxTerminals && (
-        <button
-          onClick={onCreate}
-          className="shrink-0 p-0.5 text-gray-600 hover:text-gray-300 hover:bg-gray-800 rounded transition-colors"
-          title="New terminal"
-        >
-          <Plus size={12} />
-        </button>
-      )}
+      <button
+        onClick={onCreate}
+        className="shrink-0 p-0.5 text-gray-600 hover:text-gray-300 hover:bg-gray-800 rounded transition-colors"
+        title="New terminal"
+      >
+        <Plus size={12} />
+      </button>
     </div>
   )
 }
