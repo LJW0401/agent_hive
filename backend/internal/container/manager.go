@@ -106,6 +106,32 @@ func (c *Container) GetDefaultTerminal() *Terminal {
 	return nil
 }
 
+// GetCWD returns the current working directory of the default terminal's shell process.
+func (m *Manager) GetCWD(containerID string) (string, error) {
+	m.mu.RLock()
+	c, ok := m.containers[containerID]
+	m.mu.RUnlock()
+	if !ok {
+		return "", ErrContainerNotFound
+	}
+
+	dt := c.GetDefaultTerminal()
+	if dt == nil {
+		return "", ErrTerminalNotFound
+	}
+
+	pid := dt.ProcessPID()
+	if pid == 0 {
+		return "", fmt.Errorf("terminal not connected")
+	}
+
+	cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid))
+	if err != nil {
+		return "", fmt.Errorf("failed to read cwd: %w", err)
+	}
+	return cwd, nil
+}
+
 // ListTerminals returns all terminals, sorted with default first then by ID.
 func (c *Container) ListTerminals() []*Terminal {
 	c.mu.Lock()
