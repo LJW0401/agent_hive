@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { RotateCw } from 'lucide-react'
@@ -9,6 +9,10 @@ interface TerminalProps {
   containerId: string
   connected: boolean
   onReconnected: () => void
+}
+
+export interface TerminalHandle {
+  sendData: (data: string) => void
 }
 
 const THEME = {
@@ -34,7 +38,7 @@ const THEME = {
   brightWhite: '#f9fafb',
 }
 
-export default function Terminal({ containerId, connected, onReconnected }: TerminalProps) {
+const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal({ containerId, connected, onReconnected }, ref) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerm | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -42,6 +46,15 @@ export default function Terminal({ containerId, connected, onReconnected }: Term
   const [disconnected, setDisconnected] = useState(!connected)
   const [reopening, setReopening] = useState(false)
   const [mountKey, setMountKey] = useState(0)
+
+  useImperativeHandle(ref, () => ({
+    sendData: (data: string) => {
+      const ws = wsRef.current
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(new TextEncoder().encode(data))
+      }
+    },
+  }))
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -56,50 +69,62 @@ export default function Terminal({ containerId, connected, onReconnected }: Term
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
     term.open(containerRef.current)
-    fitAddon.fit()
     termRef.current = term
     fitAddonRef.current = fitAddon
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const tokenParam = getAuthToken() ? `&token=${getAuthToken()}` : ''
-    const wsUrl = `${protocol}//${window.location.host}/ws/terminal?id=${containerId}${tokenParam}`
-    const ws = new WebSocket(wsUrl)
-    wsRef.current = ws
-    ws.binaryType = 'arraybuffer'
+    // Defer WebSocket connection until layout is stable.
+    // On desktop, multiple terminals mount simultaneously and the flex/grid
+    // layout may not have settled when useEffect runs. Waiting one frame
+    // ensures fitAddon.fit() gets accurate container dimensions, avoiding
+    // a costly reflow when ResizeObserver fires later.
+    let ws: WebSocket | null = null
+    let onDataDisposable: { dispose: () => void } | null = null
+    let cancelled = false
 
-    ws.onopen = () => {
-      // Reset terminal state before history replay
-      term.write('\x1bc')
-      ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }))
-    }
+    const rafId = requestAnimationFrame(() => {
+      if (cancelled) return
+      fitAddon.fit()
 
-    ws.onmessage = (event) => {
-      if (typeof event.data === 'string') {
-        try {
-          const msg = JSON.parse(event.data)
-          if (msg.type === 'status' && msg.connected === false) {
-            setDisconnected(true)
-            return
-          }
-        } catch { /* not JSON */ }
-        term.write(event.data)
-      } else {
-        term.write(new Uint8Array(event.data))
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const tokenParam = getAuthToken() ? `&token=${getAuthToken()}` : ''
+      const wsUrl = `${protocol}//${window.location.host}/ws/terminal?id=${containerId}${tokenParam}`
+      ws = new WebSocket(wsUrl)
+      wsRef.current = ws
+      ws.binaryType = 'arraybuffer'
+
+      ws.onopen = () => {
+        term.write('\x1bc')
+        ws!.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }))
       }
-    }
 
-    ws.onclose = () => {}
-    ws.onerror = () => {}
-
-    const onDataDisposable = term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(new TextEncoder().encode(data))
+      ws.onmessage = (event) => {
+        if (typeof event.data === 'string') {
+          try {
+            const msg = JSON.parse(event.data)
+            if (msg.type === 'status' && msg.connected === false) {
+              setDisconnected(true)
+              return
+            }
+          } catch { /* not JSON */ }
+          term.write(event.data)
+        } else {
+          term.write(new Uint8Array(event.data))
+        }
       }
+
+      ws.onclose = () => {}
+      ws.onerror = () => {}
+
+      onDataDisposable = term.onData((data) => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(new TextEncoder().encode(data))
+        }
+      })
     })
 
     const handleResize = () => {
       fitAddon.fit()
-      if (ws.readyState === WebSocket.OPEN) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }))
       }
     }
@@ -130,11 +155,13 @@ export default function Terminal({ containerId, connected, onReconnected }: Term
     el.addEventListener('touchmove', onTouchMove, { passive: true })
 
     return () => {
+      cancelled = true
+      cancelAnimationFrame(rafId)
       el.removeEventListener('touchstart', onTouchStart)
       el.removeEventListener('touchmove', onTouchMove)
       resizeObserver.disconnect()
-      onDataDisposable.dispose()
-      ws.close()
+      onDataDisposable?.dispose()
+      ws?.close()
       term.dispose()
       termRef.current = null
       wsRef.current = null
@@ -174,4 +201,6 @@ export default function Terminal({ containerId, connected, onReconnected }: Term
       )}
     </div>
   )
-}
+})
+
+export default Terminal
