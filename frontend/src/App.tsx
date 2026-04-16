@@ -18,8 +18,9 @@ import {
   useSortable,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, LayoutGrid, Maximize2 } from 'lucide-react'
 import ProjectContainer from './components/ProjectContainer'
+import SingleProjectView from './components/SingleProjectView'
 import NewProjectSlot from './components/NewProjectSlot'
 import LoginPage from './components/LoginPage'
 import {
@@ -80,6 +81,45 @@ function DesktopApp() {
   const [direction, setDirection] = useState(0)
   const [todoRefresh, setTodoRefresh] = useState<Record<string, number>>({})
   const [terminalRefresh, setTerminalRefresh] = useState<Record<string, number>>({})
+
+  // Layout mode: multi-project grid vs single-project fullscreen
+  const LAYOUT_KEY = 'agent_hive_layout_mode'
+  const [layoutMode, setLayoutMode] = useState<'multi' | 'single'>(() => {
+    const saved = localStorage.getItem(LAYOUT_KEY)
+    return saved === 'single' ? 'single' : 'multi'
+  })
+  const [focusedContainerId, setFocusedContainerId] = useState<string | null>(null)
+
+  const toggleLayout = useCallback(() => {
+    setLayoutMode(prev => {
+      const next = prev === 'multi' ? 'single' : 'multi'
+      localStorage.setItem(LAYOUT_KEY, next)
+      return next
+    })
+  }, [])
+
+  // For single mode: determine which container to show
+  const singleContainerId = useMemo(() => {
+    if (focusedContainerId && containers.find(c => c.id === focusedContainerId)) {
+      return focusedContainerId
+    }
+    return containers[0]?.id ?? null
+  }, [focusedContainerId, containers])
+
+  // Sorted container list for single-mode navigation
+  const sortedContainerIds = useMemo(() => {
+    const sorted = [...layout].sort((a, b) => a.page - b.page || a.position - b.position)
+    return sorted.map(e => e.containerId).filter(id => containers.some(c => c.id === id))
+  }, [layout, containers])
+
+  const navigateSingle = useCallback((delta: number) => {
+    if (!singleContainerId) return
+    const idx = sortedContainerIds.indexOf(singleContainerId)
+    const next = idx + delta
+    if (next >= 0 && next < sortedContainerIds.length) {
+      setFocusedContainerId(sortedContainerIds[next])
+    }
+  }, [singleContainerId, sortedContainerIds])
 
   const connectNotifyWS = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -286,20 +326,27 @@ function DesktopApp() {
         e.preventDefault()
         handleCreate()
       }
-      // Ctrl/Cmd + ArrowLeft → previous page
+      // Ctrl/Cmd + ArrowLeft/Right
       if (mod && e.key === 'ArrowLeft') {
         e.preventDefault()
-        if (currentPage > 0) goToPage(currentPage - 1)
+        if (layoutMode === 'single') {
+          navigateSingle(-1)
+        } else {
+          if (currentPage > 0) goToPage(currentPage - 1)
+        }
       }
-      // Ctrl/Cmd + ArrowRight → next page
       if (mod && e.key === 'ArrowRight') {
         e.preventDefault()
-        if (currentPage < totalPages - 1) goToPage(currentPage + 1)
+        if (layoutMode === 'single') {
+          navigateSingle(1)
+        } else {
+          if (currentPage < totalPages - 1) goToPage(currentPage + 1)
+        }
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [currentPage, totalPages, handleCreate, goToPage])
+  }, [currentPage, totalPages, handleCreate, goToPage, layoutMode, navigateSingle])
 
   const handleLogin = useCallback((token: string) => {
     setAuthToken(token)
@@ -333,96 +380,136 @@ function DesktopApp() {
 
         <div className="ml-auto flex items-center gap-1">
           <button
-            onClick={() => goToPage(Math.max(0, currentPage - 1))}
-            disabled={currentPage === 0}
-            className="p-1 text-gray-500 hover:text-gray-300 disabled:text-gray-800 disabled:cursor-not-allowed"
+            onClick={toggleLayout}
+            className="p-1 text-gray-500 hover:text-gray-300 mr-2"
+            title={layoutMode === 'multi' ? 'Switch to single project' : 'Switch to grid'}
           >
-            <ChevronLeft size={16} />
+            {layoutMode === 'multi' ? <Maximize2 size={15} /> : <LayoutGrid size={15} />}
           </button>
 
-          {Array.from({ length: totalPages }).map((_, i) => (
-            <button
-              key={i}
-              onClick={() => goToPage(i)}
-              className={`w-2 h-2 rounded-full transition-colors ${
-                i === currentPage
-                  ? 'bg-gray-300'
-                  : 'bg-gray-700 hover:bg-gray-500'
-              }`}
-            />
-          ))}
+          {layoutMode === 'multi' && (
+            <>
+              <button
+                onClick={() => goToPage(Math.max(0, currentPage - 1))}
+                disabled={currentPage === 0}
+                className="p-1 text-gray-500 hover:text-gray-300 disabled:text-gray-800 disabled:cursor-not-allowed"
+              >
+                <ChevronLeft size={16} />
+              </button>
 
-          <button
-            onClick={() => goToPage(currentPage + 1)}
-            disabled={currentPage >= totalPages - 1}
-            className="p-1 text-gray-500 hover:text-gray-300 disabled:text-gray-800 disabled:cursor-not-allowed"
-          >
-            <ChevronRight size={16} />
-          </button>
+              {Array.from({ length: totalPages }).map((_, i) => (
+                <button
+                  key={i}
+                  onClick={() => goToPage(i)}
+                  className={`w-2 h-2 rounded-full transition-colors ${
+                    i === currentPage
+                      ? 'bg-gray-300'
+                      : 'bg-gray-700 hover:bg-gray-500'
+                  }`}
+                />
+              ))}
+
+              <button
+                onClick={() => goToPage(currentPage + 1)}
+                disabled={currentPage >= totalPages - 1}
+                className="p-1 text-gray-500 hover:text-gray-300 disabled:text-gray-800 disabled:cursor-not-allowed"
+              >
+                <ChevronRight size={16} />
+              </button>
+            </>
+          )}
         </div>
       </header>
 
-      <main className="flex-1 min-h-0 overflow-hidden relative">
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragStart={handleDragStart}
-          onDragEnd={handleDragEnd}
-        >
-          <AnimatePresence initial={false} mode="wait" custom={direction}>
-            <motion.div
-              key={currentPage}
-              custom={direction}
-              variants={{
-                enter: (d: number) => ({ x: d > 0 ? '50%' : '-50%', opacity: 0 }),
-                center: { x: 0, opacity: 1 },
-                exit: (d: number) => ({ x: d > 0 ? '-50%' : '50%', opacity: 0 }),
-              }}
-              initial="enter"
-              animate="center"
-              exit="exit"
-              transition={{ duration: 0.2, ease: 'easeInOut' }}
-              className="absolute inset-0 p-2"
-            >
-              <SortableContext items={sortableIds} strategy={rectSortingStrategy}>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 h-full grid-rows-2">
-                  {pageSlots.map((container, idx) =>
-                    container ? (
-                      <SortableGridItem key={container.id} id={container.id}>
-                        {(dragHandleProps) => (
-                          <ProjectContainer
-                            container={container}
-                            onClose={handleClose}
-                            onRename={handleRename}
-                            onStatusChange={handleStatusChange}
-                            todoRefreshKey={todoRefresh[container.id] ?? 0}
-                            terminalRefreshKey={terminalRefresh[container.id] ?? 0}
-                            currentPage={currentPage}
-                            totalPages={totalPages}
-                            onMoveToPage={moveToPage}
-                            dragHandleProps={dragHandleProps}
-                          />
-                        )}
-                      </SortableGridItem>
-                    ) : (
-                      <NewProjectSlot key={`empty-${idx}`} onClick={handleCreate} />
-                    ),
-                  )}
-                </div>
-              </SortableContext>
-            </motion.div>
-          </AnimatePresence>
+      <main className="flex-1 min-h-0 overflow-hidden relative" onClick={(e) => {
+        // Track focused container for single-mode switching
+        const el = (e.target as HTMLElement).closest('[data-container-id]')
+        if (el) setFocusedContainerId(el.getAttribute('data-container-id'))
+      }}>
+        {layoutMode === 'single' && singleContainerId ? (
+          (() => {
+            const c = containers.find(c => c.id === singleContainerId)
+            if (!c) return null
+            const idx = sortedContainerIds.indexOf(singleContainerId)
+            return (
+              <SingleProjectView
+                container={c}
+                onClose={handleClose}
+                onRename={handleRename}
+                onStatusChange={handleStatusChange}
+                todoRefreshKey={todoRefresh[c.id] ?? 0}
+                terminalRefreshKey={terminalRefresh[c.id] ?? 0}
+                canGoLeft={idx > 0}
+                canGoRight={idx < sortedContainerIds.length - 1}
+                onNavigateLeft={() => navigateSingle(-1)}
+                onNavigateRight={() => navigateSingle(1)}
+              />
+            )
+          })()
+        ) : (
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+          >
+            <AnimatePresence initial={false} mode="wait" custom={direction}>
+              <motion.div
+                key={currentPage}
+                custom={direction}
+                variants={{
+                  enter: (d: number) => ({ x: d > 0 ? '50%' : '-50%', opacity: 0 }),
+                  center: { x: 0, opacity: 1 },
+                  exit: (d: number) => ({ x: d > 0 ? '-50%' : '50%', opacity: 0 }),
+                }}
+                initial="enter"
+                animate="center"
+                exit="exit"
+                transition={{ duration: 0.2, ease: 'easeInOut' }}
+                className="absolute inset-0 p-2"
+              >
+                <SortableContext items={sortableIds} strategy={rectSortingStrategy}>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 h-full grid-rows-2">
+                    {pageSlots.map((container, idx) =>
+                      container ? (
+                        <SortableGridItem key={container.id} id={container.id}>
+                          {(dragHandleProps) => (
+                            <div data-container-id={container.id}>
+                              <ProjectContainer
+                                container={container}
+                                onClose={handleClose}
+                                onRename={handleRename}
+                                onStatusChange={handleStatusChange}
+                                todoRefreshKey={todoRefresh[container.id] ?? 0}
+                                terminalRefreshKey={terminalRefresh[container.id] ?? 0}
+                                currentPage={currentPage}
+                                totalPages={totalPages}
+                                onMoveToPage={moveToPage}
+                                dragHandleProps={dragHandleProps}
+                              />
+                            </div>
+                          )}
+                        </SortableGridItem>
+                      ) : (
+                        <NewProjectSlot key={`empty-${idx}`} onClick={handleCreate} />
+                      ),
+                    )}
+                  </div>
+                </SortableContext>
+              </motion.div>
+            </AnimatePresence>
 
-          <DragOverlay>
-            {activeContainer ? (
-              <div className="rounded-lg border border-gray-600 bg-[#111114] opacity-80 w-full h-48">
-                <div className="flex items-center h-9 px-3 border-b border-gray-800 bg-[#0c0c0e] rounded-t-lg">
-                  <span className="text-xs text-gray-300">{activeContainer.name}</span>
+            <DragOverlay>
+              {activeContainer ? (
+                <div className="rounded-lg border border-gray-600 bg-[#111114] opacity-80 w-full h-48">
+                  <div className="flex items-center h-9 px-3 border-b border-gray-800 bg-[#0c0c0e] rounded-t-lg">
+                    <span className="text-xs text-gray-300">{activeContainer.name}</span>
+                  </div>
                 </div>
-              </div>
-            ) : null}
-          </DragOverlay>
-        </DndContext>
+              ) : null}
+            </DragOverlay>
+          </DndContext>
+        )}
       </main>
     </div>
   )
