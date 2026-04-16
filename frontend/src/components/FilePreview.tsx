@@ -127,16 +127,31 @@ function PdfPreview({ content }: { content: string }) {
     Page: typeof import('react-pdf').Page
   } | null>(null)
   const [numPages, setNumPages] = useState(0)
-  const [currentPage, setCurrentPage] = useState(1)
+  const [containerWidth, setContainerWidth] = useState(600)
 
   useEffect(() => {
     let cancelled = false
-    import('react-pdf').then((mod) => {
+    import('react-pdf').then(async (mod) => {
       if (cancelled) return
-      mod.pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${mod.pdfjs.version}/build/pdf.worker.min.mjs`
+      // Use the worker bundled with pdfjs-dist
+      mod.pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+        'pdfjs-dist/build/pdf.worker.min.mjs',
+        import.meta.url,
+      ).toString()
       setPdfComponents({ Document: mod.Document, Page: mod.Page })
     })
     return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    if (!containerRef.current) return
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setContainerWidth(entry.contentRect.width - 32)
+      }
+    })
+    observer.observe(containerRef.current)
+    return () => observer.disconnect()
   }, [])
 
   if (!PdfComponents) {
@@ -148,38 +163,31 @@ function PdfPreview({ content }: { content: string }) {
 
   return (
     <div className="flex flex-col h-full">
-      {numPages > 1 && (
-        <div className="flex items-center justify-center gap-2 py-1.5 border-b border-gray-800 bg-[#0c0c0e]">
-          <button
-            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-            disabled={currentPage <= 1}
-            className="px-2 py-0.5 text-[10px] text-gray-400 hover:text-gray-200 disabled:opacity-30"
-          >
-            Prev
-          </button>
-          <span className="text-[10px] text-gray-500">{currentPage} / {numPages}</span>
-          <button
-            onClick={() => setCurrentPage(p => Math.min(numPages, p + 1))}
-            disabled={currentPage >= numPages}
-            className="px-2 py-0.5 text-[10px] text-gray-400 hover:text-gray-200 disabled:opacity-30"
-          >
-            Next
-          </button>
+      {numPages > 0 && (
+        <div className="flex items-center justify-center py-1 border-b border-gray-800 bg-[#0c0c0e]">
+          <span className="text-[10px] text-gray-500">{numPages} pages</span>
         </div>
       )}
-      <div ref={containerRef} className="flex-1 overflow-auto flex justify-center p-4">
-        <Document
-          file={dataUrl}
-          onLoadSuccess={({ numPages: n }) => setNumPages(n)}
-          loading={<div className="text-[12px] text-gray-400">Loading PDF...</div>}
-        >
-          <Page
-            pageNumber={currentPage}
-            width={containerRef.current?.clientWidth ? containerRef.current.clientWidth - 32 : 600}
-            renderTextLayer={false}
-            renderAnnotationLayer={false}
-          />
-        </Document>
+      <div ref={containerRef} className="flex-1 overflow-auto">
+        <div className="flex flex-col items-center gap-2 p-4">
+          <Document
+            file={dataUrl}
+            onLoadSuccess={({ numPages: n }) => setNumPages(n)}
+            loading={<div className="text-[12px] text-gray-400">Loading PDF...</div>}
+            error={<div className="text-[12px] text-red-400">Failed to load PDF</div>}
+          >
+            {Array.from({ length: numPages }, (_, i) => (
+              <Page
+                key={i + 1}
+                pageNumber={i + 1}
+                width={Math.min(containerWidth, 900)}
+                renderTextLayer={true}
+                renderAnnotationLayer={true}
+                className="shadow-lg mb-2"
+              />
+            ))}
+          </Document>
+        </div>
       </div>
     </div>
   )
