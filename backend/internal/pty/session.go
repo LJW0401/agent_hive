@@ -18,6 +18,7 @@ import (
 type SessionOptions struct {
 	User  string // target username (empty = current user)
 	Shell string // shell path (empty = auto-detect)
+	Dir   string // working directory override (empty = default)
 }
 
 // Session wraps a PTY process.
@@ -94,6 +95,11 @@ func resolveSessionParams(opts *SessionOptions) (shell string, env []string, sys
 		}
 		dir = ""
 		env = append(os.Environ(), "TERM=xterm-256color")
+	}
+
+	// Allow explicit directory override
+	if opts.Dir != "" {
+		dir = opts.Dir
 	}
 
 	return shell, env, sysAttr, dir, nil

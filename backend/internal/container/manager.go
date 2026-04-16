@@ -257,9 +257,23 @@ func (m *Manager) CreateTerminal(containerID string) (*Terminal, error) {
 	c.mu.Lock()
 	c.mu.Unlock()
 
+	// Inherit CWD from default terminal
+	var cwd string
+	if dt := c.GetDefaultTerminal(); dt != nil {
+		if pid := dt.ProcessPID(); pid > 0 {
+			if link, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid)); err == nil {
+				cwd = link
+			}
+		}
+	}
+
 	tid := m.nextTerminalID(containerID)
 
-	session, err := ptypkg.NewSession(m.ptyOpts)
+	opts := *m.ptyOpts
+	if cwd != "" {
+		opts.Dir = cwd
+	}
+	session, err := ptypkg.NewSession(&opts)
 	if err != nil {
 		return nil, err
 	}
