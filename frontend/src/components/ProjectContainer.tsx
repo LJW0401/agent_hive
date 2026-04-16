@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { X, Pencil, Check, ArrowLeft, ArrowRight } from 'lucide-react'
+import { X, Pencil, Check, ArrowLeft, ArrowRight, FolderOpen, TerminalSquare } from 'lucide-react'
 import Terminal from './Terminal'
 import TerminalTabBar from './TerminalTabBar'
 import ConfirmDialog from './ConfirmDialog'
 import TodoList from './TodoList'
+import FileBrowser from './FileBrowser'
 import { useTerminalTabs } from '../hooks/useTerminalTabs'
+import { useFileBrowser } from '../hooks/useFileBrowser'
 import type { Container } from '../api'
 
 interface ProjectContainerProps {
@@ -31,11 +33,24 @@ export default function ProjectContainer({ container, onClose, onRename, onStatu
   const bodyRef = useRef<HTMLDivElement>(null)
   const draggingRef = useRef(false)
 
+  const [viewMode, setViewMode] = useState<'terminal' | 'files'>('terminal')
+
   const {
     terminals, activeTerminalId, setActiveTerminalId,
     confirmClose, terminalRefs,
     handleCreateTerminal, handleCloseTerminal, doCloseTerminal, cancelClose,
   } = useTerminalTabs(container.id, terminalRefreshKey)
+
+  const fileBrowser = useFileBrowser()
+
+  const toggleViewMode = useCallback(async () => {
+    if (viewMode === 'terminal') {
+      await fileBrowser.initBrowser(container.id)
+      setViewMode('files')
+    } else {
+      setViewMode('terminal')
+    }
+  }, [viewMode, container.id, fileBrowser])
 
   useEffect(() => {
     if (editing) {
@@ -112,6 +127,13 @@ export default function ProjectContainer({ container, onClose, onRename, onStatu
           </div>
         )}
         <div className="flex items-center gap-0.5 ml-2 shrink-0">
+          <button
+            onClick={toggleViewMode}
+            className="text-gray-600 hover:text-gray-300 p-0.5"
+            title={viewMode === 'terminal' ? 'Browse files' : 'Back to terminal'}
+          >
+            {viewMode === 'terminal' ? <FolderOpen size={13} /> : <TerminalSquare size={13} />}
+          </button>
           {currentPage > 0 && (
             <button
               onClick={() => onMoveToPage(container.id, currentPage - 1)}
@@ -139,56 +161,71 @@ export default function ProjectContainer({ container, onClose, onRename, onStatu
         </div>
       </div>
 
-      {/* Body: todo list + splitter + terminal tabs + terminal */}
+      {/* Body */}
       <div ref={bodyRef} className="flex flex-1 min-h-0">
-        {/* Left: Todo area */}
-        {!todoHidden && (
-          <div
-            className="shrink-0 border-r border-gray-800 hidden lg:flex flex-col overflow-hidden"
-            style={{ width: `${todoRatio * 100}%` }}
-          >
-            <TodoList containerID={container.id} refreshKey={todoRefreshKey} />
-          </div>
+        {/* File browser mode */}
+        {viewMode === 'files' && fileBrowser.rootPath && (
+          <FileBrowser
+            containerId={container.id}
+            rootPath={fileBrowser.rootPath}
+            selectedFile={fileBrowser.selectedFile}
+            fileContent={fileBrowser.fileContent}
+            loading={fileBrowser.loading}
+            onSelectFile={(path) => fileBrowser.selectFile(container.id, path)}
+          />
         )}
-        {/* Splitter */}
-        <div
-          className="w-1 shrink-0 hidden lg:flex items-center justify-center cursor-col-resize hover:bg-gray-700/50 active:bg-gray-600/50 transition-colors"
-          onMouseDown={handleSplitMouseDown}
-        >
-          <div className="w-0.5 h-8 rounded-full bg-gray-700" />
-        </div>
-        {/* Right: Terminal tabs + terminal */}
-        <div className="flex-1 min-w-0 min-h-0 flex flex-col">
-          {terminals.length > 0 && (
-            <TerminalTabBar
-              terminals={terminals}
-              activeId={activeTerminalId}
-              onSelect={setActiveTerminalId}
-              onCreate={handleCreateTerminal}
-              onClose={handleCloseTerminal}
-            />
+
+        {/* Terminal mode (hidden when in file browser, but kept in DOM) */}
+        <div className={`flex flex-1 min-h-0 ${viewMode === 'files' ? 'hidden' : ''}`}>
+          {/* Left: Todo area */}
+          {!todoHidden && (
+            <div
+              className="shrink-0 border-r border-gray-800 hidden lg:flex flex-col overflow-hidden"
+              style={{ width: `${todoRatio * 100}%` }}
+            >
+              <TodoList containerID={container.id} refreshKey={todoRefreshKey} />
+            </div>
           )}
-          <div className="flex-1 min-h-0 relative">
-            {terminals.map((t) => (
-              <div
-                key={t.id}
-                className="absolute inset-0"
-                style={{ display: t.id === activeTerminalId ? 'block' : 'none' }}
-              >
-                <Terminal
-                  ref={(handle) => {
-                    if (handle) terminalRefs.current.set(t.id, handle)
-                    else terminalRefs.current.delete(t.id)
-                  }}
-                  containerId={container.id}
-                  terminalId={t.id}
-                  connected={t.connected}
-                  active={t.id === activeTerminalId}
-                  isDefault={t.isDefault}
-                  onReconnected={() => onStatusChange(container.id, true)}
-                />
-              </div>
-            ))}
+          {/* Splitter */}
+          <div
+            className="w-1 shrink-0 hidden lg:flex items-center justify-center cursor-col-resize hover:bg-gray-700/50 active:bg-gray-600/50 transition-colors"
+            onMouseDown={handleSplitMouseDown}
+          >
+            <div className="w-0.5 h-8 rounded-full bg-gray-700" />
+          </div>
+          {/* Right: Terminal tabs + terminal */}
+          <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+            {terminals.length > 0 && (
+              <TerminalTabBar
+                terminals={terminals}
+                activeId={activeTerminalId}
+                onSelect={setActiveTerminalId}
+                onCreate={handleCreateTerminal}
+                onClose={handleCloseTerminal}
+              />
+            )}
+            <div className="flex-1 min-h-0 relative">
+              {terminals.map((t) => (
+                <div
+                  key={t.id}
+                  className="absolute inset-0"
+                  style={{ display: t.id === activeTerminalId ? 'block' : 'none' }}
+                >
+                  <Terminal
+                    ref={(handle) => {
+                      if (handle) terminalRefs.current.set(t.id, handle)
+                      else terminalRefs.current.delete(t.id)
+                    }}
+                    containerId={container.id}
+                    terminalId={t.id}
+                    connected={t.connected}
+                    active={t.id === activeTerminalId}
+                    isDefault={t.isDefault}
+                    onReconnected={() => onStatusChange(container.id, true)}
+                  />
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </div>
