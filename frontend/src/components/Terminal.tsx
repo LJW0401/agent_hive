@@ -7,7 +7,10 @@ import '@xterm/xterm/css/xterm.css'
 
 interface TerminalProps {
   containerId: string
+  terminalId?: string
   connected: boolean
+  active?: boolean
+  isDefault?: boolean
   onReconnected: () => void
 }
 
@@ -38,7 +41,10 @@ const THEME = {
   brightWhite: '#f9fafb',
 }
 
-const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal({ containerId, connected, onReconnected }, ref) {
+const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
+  { containerId, terminalId, connected, active = true, isDefault = true, onReconnected },
+  ref,
+) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerm | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -46,6 +52,9 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal({ c
   const [disconnected, setDisconnected] = useState(!connected)
   const [reopening, setReopening] = useState(false)
   const [mountKey, setMountKey] = useState(0)
+
+  // For non-default terminals, track whether we should render based on active state
+  const shouldConnect = isDefault || active
 
   useImperativeHandle(ref, () => ({
     sendData: (data: string) => {
@@ -57,7 +66,7 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal({ c
   }))
 
   useEffect(() => {
-    if (!containerRef.current) return
+    if (!containerRef.current || !shouldConnect) return
 
     const term = new XTerm({
       cursorBlink: true,
@@ -72,11 +81,6 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal({ c
     termRef.current = term
     fitAddonRef.current = fitAddon
 
-    // Defer WebSocket connection until layout is stable.
-    // On desktop, multiple terminals mount simultaneously and the flex/grid
-    // layout may not have settled when useEffect runs. Waiting one frame
-    // ensures fitAddon.fit() gets accurate container dimensions, avoiding
-    // a costly reflow when ResizeObserver fires later.
     let ws: WebSocket | null = null
     let onDataDisposable: { dispose: () => void } | null = null
     let cancelled = false
@@ -87,7 +91,8 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal({ c
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
       const tokenParam = getAuthToken() ? `&token=${getAuthToken()}` : ''
-      const wsUrl = `${protocol}//${window.location.host}/ws/terminal?id=${containerId}${tokenParam}`
+      const tidParam = terminalId ? `&tid=${terminalId}` : ''
+      const wsUrl = `${protocol}//${window.location.host}/ws/terminal?id=${containerId}${tidParam}${tokenParam}`
       ws = new WebSocket(wsUrl)
       wsRef.current = ws
       ws.binaryType = 'arraybuffer'
@@ -131,7 +136,7 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal({ c
     const resizeObserver = new ResizeObserver(handleResize)
     resizeObserver.observe(containerRef.current)
 
-    // Mobile touch scroll: translate touch drags into terminal scroll
+    // Mobile touch scroll
     let touchStartY = 0
     let touchAccum = 0
     const lineHeight = Math.ceil(term.options.fontSize! * 1.2)
@@ -167,7 +172,7 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal({ c
       wsRef.current = null
       fitAddonRef.current = null
     }
-  }, [containerId, mountKey])
+  }, [containerId, terminalId, mountKey, shouldConnect])
 
   const handleReopen = async () => {
     setReopening(true)
@@ -183,9 +188,14 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal({ c
     }
   }
 
+  // Non-default inactive terminal: render nothing
+  if (!shouldConnect) {
+    return <div className="w-full h-full bg-[#111114]" />
+  }
+
   return (
     <div className="w-full h-full flex flex-col">
-      <div ref={containerRef} className="flex-1 min-h-0" key={mountKey} />
+      <div ref={containerRef} className="flex-1 min-h-0" key={`${mountKey}-${shouldConnect}`} />
       {disconnected && (
         <div className="flex items-center justify-center gap-2 py-2 bg-[#0c0c0e] border-t border-gray-800">
           <span className="text-[10px] text-gray-500">Terminal disconnected</span>

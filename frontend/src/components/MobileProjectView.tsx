@@ -1,9 +1,12 @@
 import { useState, useRef, useEffect } from 'react'
 import { X, Pencil, Check, ChevronLeft, ChevronRight } from 'lucide-react'
 import Terminal, { type TerminalHandle } from './Terminal'
+import TerminalTabBar from './TerminalTabBar'
+import ConfirmDialog from './ConfirmDialog'
 import ShortcutBar from './ShortcutBar'
 import TodoList from './TodoList'
-import type { Container } from '../api'
+import { listTerminals, createTerminal, deleteTerminal, hasProcess } from '../api'
+import type { Container, TerminalInfo } from '../api'
 
 interface MobileProjectViewProps {
   container: Container
@@ -11,6 +14,7 @@ interface MobileProjectViewProps {
   onRename: (id: string, name: string) => void
   onStatusChange: (id: string, connected: boolean) => void
   todoRefreshKey?: number
+  terminalRefreshKey?: number
   index: number
   total: number
   onMoveLeft?: () => void
@@ -23,6 +27,7 @@ export default function MobileProjectView({
   onRename,
   onStatusChange,
   todoRefreshKey,
+  terminalRefreshKey,
   index,
   total,
   onMoveLeft,
@@ -31,10 +36,25 @@ export default function MobileProjectView({
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(container.name)
   const inputRef = useRef<HTMLInputElement>(null)
-  const terminalRef = useRef<TerminalHandle>(null)
+  const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map())
   const [splitRatio, setSplitRatio] = useState(0.5)
   const splitContainerRef = useRef<HTMLDivElement>(null)
   const draggingRef = useRef(false)
+
+  // Terminal tabs state
+  const [terminals, setTerminals] = useState<TerminalInfo[]>([])
+  const [activeTerminalId, setActiveTerminalId] = useState<string>('')
+  const [confirmClose, setConfirmClose] = useState<string | null>(null)
+
+  // Load terminals
+  useEffect(() => {
+    listTerminals(container.id).then((terms) => {
+      setTerminals(terms)
+      if (terms.length > 0 && !activeTerminalId) {
+        setActiveTerminalId(terms.find(t => t.isDefault)?.id ?? terms[0].id)
+      }
+    })
+  }, [container.id, terminalRefreshKey])
 
   useEffect(() => {
     setName(container.name)
@@ -58,7 +78,49 @@ export default function MobileProjectView({
   }
 
   const handleSendData = (data: string) => {
-    terminalRef.current?.sendData(data)
+    const handle = terminalRefs.current.get(activeTerminalId)
+    handle?.sendData(data)
+  }
+
+  const handleCreateTerminal = async () => {
+    try {
+      const term = await createTerminal(container.id)
+      setTerminals(prev => [...prev, term])
+      setActiveTerminalId(term.id)
+    } catch (e) {
+      console.error('create terminal failed:', e)
+    }
+  }
+
+  const handleCloseTerminal = async (tid: string) => {
+    try {
+      const hasProc = await hasProcess(container.id, tid)
+      if (hasProc) {
+        setConfirmClose(tid)
+        return
+      }
+      await doCloseTerminal(tid)
+    } catch {
+      setConfirmClose(tid)
+    }
+  }
+
+  const doCloseTerminal = async (tid: string) => {
+    try {
+      await deleteTerminal(container.id, tid)
+      setTerminals(prev => {
+        const remaining = prev.filter(t => t.id !== tid)
+        if (activeTerminalId === tid && remaining.length > 0) {
+          const oldIdx = prev.findIndex(t => t.id === tid)
+          const newIdx = Math.min(oldIdx, remaining.length - 1)
+          setActiveTerminalId(remaining[newIdx].id)
+        }
+        return remaining
+      })
+    } catch (e) {
+      console.error('delete terminal failed:', e)
+    }
+    setConfirmClose(null)
   }
 
   // Split pane touch handlers
@@ -74,10 +136,10 @@ export default function MobileProjectView({
     e.stopPropagation()
     const rect = splitContainerRef.current.getBoundingClientRect()
     const y = e.touches[0].clientY - rect.top
-    const total = rect.height
-    const minRatio = MIN_PX / total
-    const maxRatio = 1 - MIN_PX / total
-    setSplitRatio(Math.min(maxRatio, Math.max(minRatio, y / total)))
+    const totalHeight = rect.height
+    const minRatio = MIN_PX / totalHeight
+    const maxRatio = 1 - MIN_PX / totalHeight
+    setSplitRatio(Math.min(maxRatio, Math.max(minRatio, y / totalHeight)))
   }
 
   const handleTouchEnd = () => {
@@ -151,15 +213,40 @@ export default function MobileProjectView({
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
       >
-        {/* Terminal */}
+        {/* Terminal area */}
         <div style={{ height: `${splitRatio * 100}%` }} className="min-h-0 overflow-hidden flex flex-col">
-          <div className="flex-1 min-h-0">
-            <Terminal
-              ref={terminalRef}
-              containerId={container.id}
-              connected={container.connected}
-              onReconnected={() => onStatusChange(container.id, true)}
+          {/* Terminal tabs */}
+          {terminals.length > 0 && (
+            <TerminalTabBar
+              terminals={terminals}
+              activeId={activeTerminalId}
+              onSelect={setActiveTerminalId}
+              onCreate={handleCreateTerminal}
+              onClose={handleCloseTerminal}
             />
+          )}
+          {/* Terminal content */}
+          <div className="flex-1 min-h-0 relative">
+            {terminals.map((t) => (
+              <div
+                key={t.id}
+                className="absolute inset-0"
+                style={{ display: t.id === activeTerminalId ? 'block' : 'none' }}
+              >
+                <Terminal
+                  ref={(handle) => {
+                    if (handle) terminalRefs.current.set(t.id, handle)
+                    else terminalRefs.current.delete(t.id)
+                  }}
+                  containerId={container.id}
+                  terminalId={t.id}
+                  connected={t.connected}
+                  active={t.id === activeTerminalId}
+                  isDefault={t.isDefault}
+                  onReconnected={() => onStatusChange(container.id, true)}
+                />
+              </div>
+            ))}
           </div>
           <ShortcutBar onSend={handleSendData} />
         </div>
@@ -177,6 +264,14 @@ export default function MobileProjectView({
           <TodoList containerID={container.id} refreshKey={todoRefreshKey} />
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmClose !== null}
+        title="Close terminal?"
+        message="This terminal has a running process. Are you sure you want to close it?"
+        onConfirm={() => confirmClose && doCloseTerminal(confirmClose)}
+        onCancel={() => setConfirmClose(null)}
+      />
     </div>
   )
 }

@@ -1,8 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { X, Pencil, Check, ArrowLeft, ArrowRight } from 'lucide-react'
-import Terminal from './Terminal'
+import Terminal, { type TerminalHandle } from './Terminal'
+import TerminalTabBar from './TerminalTabBar'
+import ConfirmDialog from './ConfirmDialog'
 import TodoList from './TodoList'
-import type { Container } from '../api'
+import { listTerminals, createTerminal, deleteTerminal, hasProcess } from '../api'
+import type { Container, TerminalInfo } from '../api'
 
 interface ProjectContainerProps {
   container: Container
@@ -10,6 +13,7 @@ interface ProjectContainerProps {
   onRename: (id: string, name: string) => void
   onStatusChange: (id: string, connected: boolean) => void
   todoRefreshKey?: number
+  terminalRefreshKey?: number
   currentPage: number
   totalPages: number
   onMoveToPage: (containerId: string, page: number) => void
@@ -17,15 +21,31 @@ interface ProjectContainerProps {
 }
 
 const MAX_TODO_RATIO = 2 / 3
-const DEFAULT_TODO_RATIO = 0.25 // ~w-48 equivalent on a typical container
+const DEFAULT_TODO_RATIO = 0.25
 
-export default function ProjectContainer({ container, onClose, onRename, onStatusChange, todoRefreshKey, currentPage, totalPages, onMoveToPage, dragHandleProps }: ProjectContainerProps) {
+export default function ProjectContainer({ container, onClose, onRename, onStatusChange, todoRefreshKey, terminalRefreshKey, currentPage, totalPages, onMoveToPage, dragHandleProps }: ProjectContainerProps) {
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(container.name)
   const [todoRatio, setTodoRatio] = useState(DEFAULT_TODO_RATIO)
   const inputRef = useRef<HTMLInputElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const draggingRef = useRef(false)
+
+  // Terminal tabs state
+  const [terminals, setTerminals] = useState<TerminalInfo[]>([])
+  const [activeTerminalId, setActiveTerminalId] = useState<string>('')
+  const [confirmClose, setConfirmClose] = useState<string | null>(null)
+  const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map())
+
+  // Load terminals
+  useEffect(() => {
+    listTerminals(container.id).then((terms) => {
+      setTerminals(terms)
+      if (terms.length > 0 && !activeTerminalId) {
+        setActiveTerminalId(terms.find(t => t.isDefault)?.id ?? terms[0].id)
+      }
+    })
+  }, [container.id, terminalRefreshKey])
 
   useEffect(() => {
     if (editing) {
@@ -65,6 +85,49 @@ export default function ProjectContainer({ container, onClose, onRename, onStatu
     document.addEventListener('mousemove', onMouseMove)
     document.addEventListener('mouseup', onMouseUp)
   }, [])
+
+  const handleCreateTerminal = async () => {
+    try {
+      const term = await createTerminal(container.id)
+      setTerminals(prev => [...prev, term])
+      setActiveTerminalId(term.id)
+    } catch (e) {
+      console.error('create terminal failed:', e)
+    }
+  }
+
+  const handleCloseTerminal = async (tid: string) => {
+    try {
+      const hasProc = await hasProcess(container.id, tid)
+      if (hasProc) {
+        setConfirmClose(tid)
+        return
+      }
+      await doCloseTerminal(tid)
+    } catch {
+      // If check fails, show confirm as safety
+      setConfirmClose(tid)
+    }
+  }
+
+  const doCloseTerminal = async (tid: string) => {
+    try {
+      await deleteTerminal(container.id, tid)
+      setTerminals(prev => {
+        const remaining = prev.filter(t => t.id !== tid)
+        if (activeTerminalId === tid && remaining.length > 0) {
+          // Switch to adjacent (prefer right, fallback left)
+          const oldIdx = prev.findIndex(t => t.id === tid)
+          const newIdx = Math.min(oldIdx, remaining.length - 1)
+          setActiveTerminalId(remaining[newIdx].id)
+        }
+        return remaining
+      })
+    } catch (e) {
+      console.error('delete terminal failed:', e)
+    }
+    setConfirmClose(null)
+  }
 
   const todoHidden = todoRatio < 0.02
 
@@ -129,7 +192,7 @@ export default function ProjectContainer({ container, onClose, onRename, onStatu
         </div>
       </div>
 
-      {/* Body: todo list + splitter + terminal */}
+      {/* Body: todo list + splitter + terminal tabs + terminal */}
       <div ref={bodyRef} className="flex flex-1 min-h-0">
         {/* Left: Todo area */}
         {!todoHidden && (
@@ -147,15 +210,49 @@ export default function ProjectContainer({ container, onClose, onRename, onStatu
         >
           <div className="w-0.5 h-8 rounded-full bg-gray-700" />
         </div>
-        {/* Right: Terminal */}
-        <div className="flex-1 min-w-0 min-h-0">
-          <Terminal
-            containerId={container.id}
-            connected={container.connected}
-            onReconnected={() => onStatusChange(container.id, true)}
-          />
+        {/* Right: Terminal tabs + terminal */}
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+          {terminals.length > 0 && (
+            <TerminalTabBar
+              terminals={terminals}
+              activeId={activeTerminalId}
+              onSelect={setActiveTerminalId}
+              onCreate={handleCreateTerminal}
+              onClose={handleCloseTerminal}
+            />
+          )}
+          <div className="flex-1 min-h-0 relative">
+            {terminals.map((t) => (
+              <div
+                key={t.id}
+                className="absolute inset-0"
+                style={{ display: t.id === activeTerminalId ? 'block' : 'none' }}
+              >
+                <Terminal
+                  ref={(handle) => {
+                    if (handle) terminalRefs.current.set(t.id, handle)
+                    else terminalRefs.current.delete(t.id)
+                  }}
+                  containerId={container.id}
+                  terminalId={t.id}
+                  connected={t.connected}
+                  active={t.id === activeTerminalId}
+                  isDefault={t.isDefault}
+                  onReconnected={() => onStatusChange(container.id, true)}
+                />
+              </div>
+            ))}
+          </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmClose !== null}
+        title="Close terminal?"
+        message="This terminal has a running process. Are you sure you want to close it?"
+        onConfirm={() => confirmClose && doCloseTerminal(confirmClose)}
+        onCancel={() => setConfirmClose(null)}
+      />
     </div>
   )
 }

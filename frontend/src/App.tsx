@@ -79,6 +79,7 @@ function DesktopApp() {
   const [activeId, setActiveId] = useState<string | null>(null)
   const [direction, setDirection] = useState(0)
   const [todoRefresh, setTodoRefresh] = useState<Record<string, number>>({})
+  const [terminalRefresh, setTerminalRefresh] = useState<Record<string, number>>({})
 
   const connectNotifyWS = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -89,6 +90,12 @@ function DesktopApp() {
         const msg = JSON.parse(event.data)
         if (msg.type === 'todos-updated' && msg.containerId) {
           setTodoRefresh((prev) => ({
+            ...prev,
+            [msg.containerId]: (prev[msg.containerId] ?? 0) + 1,
+          }))
+        }
+        if (msg.type === 'terminals-changed' && msg.containerId) {
+          setTerminalRefresh((prev) => ({
             ...prev,
             [msg.containerId]: (prev[msg.containerId] ?? 0) + 1,
           }))
@@ -389,6 +396,7 @@ function DesktopApp() {
                             onRename={handleRename}
                             onStatusChange={handleStatusChange}
                             todoRefreshKey={todoRefresh[container.id] ?? 0}
+                            terminalRefreshKey={terminalRefresh[container.id] ?? 0}
                             currentPage={currentPage}
                             totalPages={totalPages}
                             onMoveToPage={moveToPage}
