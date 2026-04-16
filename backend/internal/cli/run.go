@@ -56,7 +56,7 @@ func CmdRun(args []string) {
 		User:  cfg.User,
 		Shell: cfg.Shell,
 	}
-	mgr := container.NewManager(cfg.DataDir, ptyOpts)
+	mgr := container.NewManager(cfg.DataDir, ptyOpts, db)
 
 	metas, err := db.ListContainerMeta()
 	if err != nil {
