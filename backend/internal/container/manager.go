@@ -19,7 +19,6 @@ import (
 var (
 	ErrContainerNotFound = errors.New("container not found")
 	ErrTerminalNotFound  = errors.New("terminal not found")
-	ErrTerminalLimit     = errors.New("terminal limit reached")
 	ErrDefaultTerminal   = errors.New("cannot delete default terminal")
 	ErrAlreadyConnected  = errors.New("terminal already connected")
 )
@@ -105,6 +104,32 @@ func (c *Container) GetDefaultTerminal() *Terminal {
 		}
 	}
 	return nil
+}
+
+// GetCWD returns the current working directory of the default terminal's shell process.
+func (m *Manager) GetCWD(containerID string) (string, error) {
+	m.mu.RLock()
+	c, ok := m.containers[containerID]
+	m.mu.RUnlock()
+	if !ok {
+		return "", ErrContainerNotFound
+	}
+
+	dt := c.GetDefaultTerminal()
+	if dt == nil {
+		return "", ErrTerminalNotFound
+	}
+
+	pid := dt.ProcessPID()
+	if pid == 0 {
+		return "", fmt.Errorf("terminal not connected")
+	}
+
+	cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid))
+	if err != nil {
+		return "", fmt.Errorf("failed to read cwd: %w", err)
+	}
+	return cwd, nil
 }
 
 // ListTerminals returns all terminals, sorted with default first then by ID.
@@ -229,17 +254,23 @@ func (m *Manager) CreateTerminal(containerID string) (*Terminal, error) {
 		return nil, ErrContainerNotFound
 	}
 
-	// Check limit before expensive PTY creation
-	c.mu.Lock()
-	if len(c.terminals) >= 5 {
-		c.mu.Unlock()
-		return nil, ErrTerminalLimit
+	// Inherit CWD from default terminal
+	var cwd string
+	if dt := c.GetDefaultTerminal(); dt != nil {
+		if pid := dt.ProcessPID(); pid > 0 {
+			if link, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid)); err == nil {
+				cwd = link
+			}
+		}
 	}
-	c.mu.Unlock()
 
 	tid := m.nextTerminalID(containerID)
 
-	session, err := ptypkg.NewSession(m.ptyOpts)
+	opts := *m.ptyOpts
+	if cwd != "" {
+		opts.Dir = cwd
+	}
+	session, err := ptypkg.NewSession(&opts)
 	if err != nil {
 		return nil, err
 	}
@@ -252,15 +283,8 @@ func (m *Manager) CreateTerminal(containerID string) (*Terminal, error) {
 		return nil, err
 	}
 
-	// Re-check under lock and insert atomically
+	// Insert under lock atomically
 	c.mu.Lock()
-	if len(c.terminals) >= 5 {
-		c.mu.Unlock()
-		session.Close()
-		logFile.Close()
-		os.Remove(m.terminalLogPath(containerID, tid))
-		return nil, ErrTerminalLimit
-	}
 	// Find next available terminal number to avoid duplicate names
 	name := nextTerminalName(c.terminals)
 	term := &Terminal{

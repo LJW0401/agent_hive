@@ -1,4 +1,17 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+/* react-pdf text and annotation layers */
+.react-pdf__Page__textContent {
+  line-height: 1;
+  user-select: text;
+}
+.react-pdf__Page__textContent span {
+  color: transparent;
+}
+.react-pdf__Page__annotations {
+  pointer-events: auto;
+}
 
 html {
   color-scheme: dark;

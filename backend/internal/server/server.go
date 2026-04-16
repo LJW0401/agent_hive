@@ -11,8 +11,14 @@ import (
 	"strconv"
 	"strings"
 
+	"encoding/base64"
+	"io"
+	"path/filepath"
+	"sort"
+
 	"github.com/penguin/agent-hive/internal/auth"
 	"github.com/penguin/agent-hive/internal/container"
+	"github.com/penguin/agent-hive/internal/fileutil"
 	"github.com/penguin/agent-hive/internal/static"
 	"github.com/penguin/agent-hive/internal/store"
 	"github.com/penguin/agent-hive/internal/ws"
@@ -71,8 +77,33 @@ func New(devMode bool, mgr *container.Manager, db *store.Store, am *auth.Manager
 			return
 		}
 
-		// /api/containers/{id}/terminals[/{tid}[/has-process]]
+		// /api/containers/{id}/cwd
 		parts := strings.SplitN(path, "/", 3)
+		if len(parts) >= 2 && parts[1] == "cwd" && r.Method == http.MethodGet {
+			getCWDHandler(mgr, parts[0], w)
+			return
+		}
+
+		// /api/containers/{id}/files[/content|/raw]
+		if len(parts) >= 2 && parts[1] == "files" {
+			containerID := parts[0]
+			if len(parts) == 3 && parts[2] == "content" && r.Method == http.MethodGet {
+				getFileContentHandler(mgr, containerID, w, r)
+				return
+			}
+			if len(parts) == 3 && parts[2] == "raw" && r.Method == http.MethodGet {
+				getRawFileHandler(mgr, containerID, w, r)
+				return
+			}
+			if len(parts) == 2 && r.Method == http.MethodGet {
+				listFilesHandler(mgr, containerID, w, r)
+				return
+			}
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// /api/containers/{id}/terminals[/{tid}[/has-process]]
 		if len(parts) >= 2 && parts[1] == "terminals" {
 			containerID := parts[0]
 			broadcastTerminalChange := func() {
@@ -515,8 +546,6 @@ func createTerminalHandler(mgr *container.Manager, containerID string, w http.Re
 	term, err := mgr.CreateTerminal(containerID)
 	if err != nil {
 		switch {
-		case errors.Is(err, container.ErrTerminalLimit):
-			http.Error(w, err.Error(), http.StatusBadRequest)
 		case errors.Is(err, container.ErrContainerNotFound):
 			http.Error(w, err.Error(), http.StatusNotFound)
 		default:
@@ -567,6 +596,279 @@ func hasProcessHandler(mgr *container.Manager, containerID, terminalID string, w
 	hasChild := HasChildProcess(term.ProcessPID())
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"hasProcess": hasChild})
+}
+
+// --- File API handlers ---
+
+const defaultMaxLines = 1000
+
+func getCWDHandler(mgr *container.Manager, containerID string, w http.ResponseWriter) {
+	cwd, err := mgr.GetCWD(containerID)
+	if err != nil {
+		if errors.Is(err, container.ErrContainerNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"cwd": cwd})
+}
+
+type fileEntry struct {
+	Name string `json:"name"`
+	Type string `json:"type"` // "dir" or "file"
+	Size int64  `json:"size"`
+}
+
+func listFilesHandler(mgr *container.Manager, containerID string, w http.ResponseWriter, r *http.Request) {
+	cwd, err := mgr.GetCWD(containerID)
+	if err != nil {
+		if errors.Is(err, container.ErrContainerNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	relPath := r.URL.Query().Get("path")
+	if relPath == "" {
+		relPath = "."
+	}
+
+	absPath, err := fileutil.SafeJoin(cwd, relPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	entries, err := os.ReadDir(absPath)
+	if err != nil {
+		http.Error(w, "failed to read directory", http.StatusInternalServerError)
+		return
+	}
+
+	var dirs []fileEntry
+	var files []fileEntry
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		fe := fileEntry{
+			Name: e.Name(),
+			Size: info.Size(),
+		}
+		if e.IsDir() {
+			fe.Type = "dir"
+			dirs = append(dirs, fe)
+		} else {
+			fe.Type = "file"
+			files = append(files, fe)
+		}
+	}
+
+	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Name < dirs[j].Name })
+	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
+
+	result := make([]fileEntry, 0, len(dirs)+len(files))
+	result = append(result, dirs...)
+	result = append(result, files...)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+type fileContentResponse struct {
+	Type      string `json:"type"`                // text, markdown, image, pdf, binary
+	Content   string `json:"content,omitempty"`    // text content or base64
+	Truncated bool   `json:"truncated,omitempty"`  // true if file was truncated
+	Language  string `json:"language,omitempty"`   // Shiki language identifier
+	MimeType  string `json:"mimeType,omitempty"`   // for images
+}
+
+func getFileContentHandler(mgr *container.Manager, containerID string, w http.ResponseWriter, r *http.Request) {
+	cwd, err := mgr.GetCWD(containerID)
+	if err != nil {
+		if errors.Is(err, container.ErrContainerNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	relPath := r.URL.Query().Get("path")
+	if relPath == "" {
+		http.Error(w, "path parameter required", http.StatusBadRequest)
+		return
+	}
+
+	absPath, err := fileutil.SafeJoin(cwd, relPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "file not found", http.StatusNotFound)
+		} else {
+			http.Error(w, "failed to read file", http.StatusInternalServerError)
+		}
+		return
+	}
+	if info.IsDir() {
+		http.Error(w, "path is a directory", http.StatusBadRequest)
+		return
+	}
+
+	fileName := filepath.Base(absPath)
+	ft := fileutil.FileType(fileName)
+
+	var resp fileContentResponse
+
+	switch ft {
+	case "binary":
+		// Double-check with content sniffing — some files with unknown extensions are actually text
+		isBin, err := fileutil.IsBinary(absPath)
+		if err != nil {
+			http.Error(w, "failed to read file", http.StatusInternalServerError)
+			return
+		}
+		if isBin {
+			resp = fileContentResponse{Type: "binary"}
+		} else {
+			maxLines := getMaxLines(r)
+			content, truncated, err := fileutil.ReadTailLines(absPath, maxLines)
+			if err != nil {
+				http.Error(w, "failed to read file", http.StatusInternalServerError)
+				return
+			}
+			resp = fileContentResponse{
+				Type:      "text",
+				Content:   content,
+				Truncated: truncated,
+				Language:  fileutil.LanguageFromExt(fileName),
+			}
+		}
+
+	case "image":
+		data, err := readFileLimited(absPath, 10*1024*1024) // 10MB limit
+		if err != nil {
+			http.Error(w, "failed to read file", http.StatusInternalServerError)
+			return
+		}
+		resp = fileContentResponse{
+			Type:     "image",
+			Content:  base64.StdEncoding.EncodeToString(data),
+			MimeType: fileutil.MimeTypeFromExt(fileName),
+		}
+
+	case "pdf":
+		resp = fileContentResponse{Type: "pdf"}
+
+	case "markdown":
+		maxLines := getMaxLines(r)
+		content, truncated, err := fileutil.ReadTailLines(absPath, maxLines)
+		if err != nil {
+			http.Error(w, "failed to read file", http.StatusInternalServerError)
+			return
+		}
+		resp = fileContentResponse{
+			Type:      "markdown",
+			Content:   content,
+			Truncated: truncated,
+		}
+
+	default: // text
+		isBin, err := fileutil.IsBinary(absPath)
+		if err != nil {
+			http.Error(w, "failed to read file", http.StatusInternalServerError)
+			return
+		}
+		if isBin {
+			resp = fileContentResponse{Type: "binary"}
+			break
+		}
+
+		maxLines := getMaxLines(r)
+		content, truncated, err := fileutil.ReadTailLines(absPath, maxLines)
+		if err != nil {
+			http.Error(w, "failed to read file", http.StatusInternalServerError)
+			return
+		}
+		resp = fileContentResponse{
+			Type:      "text",
+			Content:   content,
+			Truncated: truncated,
+			Language:  fileutil.LanguageFromExt(fileName),
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func getRawFileHandler(mgr *container.Manager, containerID string, w http.ResponseWriter, r *http.Request) {
+	cwd, err := mgr.GetCWD(containerID)
+	if err != nil {
+		if errors.Is(err, container.ErrContainerNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	relPath := r.URL.Query().Get("path")
+	if relPath == "" {
+		http.Error(w, "path parameter required", http.StatusBadRequest)
+		return
+	}
+
+	absPath, err := fileutil.SafeJoin(cwd, relPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "file not found", http.StatusNotFound)
+		} else {
+			http.Error(w, "failed to stat file", http.StatusInternalServerError)
+		}
+		return
+	}
+	if info.IsDir() {
+		http.Error(w, "path is a directory", http.StatusBadRequest)
+		return
+	}
+
+	http.ServeFile(w, r, absPath)
+}
+
+func getMaxLines(r *http.Request) int {
+	if s := r.URL.Query().Get("maxLines"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultMaxLines
+}
+
+func readFileLimited(path string, limit int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, limit))
 }
 
 // HasChildProcess checks if a process has child processes by reading /proc/{pid}/children.

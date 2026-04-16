@@ -45,7 +45,6 @@ describe('TerminalTabBar', () => {
         onClose={vi.fn()}
       />
     )
-    // Default terminal tab should not have X button (role="button" with X icon)
     const closeButtons = container.querySelectorAll('[role="button"]')
     expect(closeButtons.length).toBe(0)
   })
@@ -61,30 +60,10 @@ describe('TerminalTabBar', () => {
       />
     )
     const closeButtons = container.querySelectorAll('[role="button"]')
-    expect(closeButtons.length).toBe(1) // only extra terminal has close
+    expect(closeButtons.length).toBe(1)
   })
 
-  it('hides + button when at max terminals', () => {
-    const terminals = Array.from({ length: 5 }, (_, i) => ({
-      id: `t-${i}`,
-      name: `Terminal ${i + 1}`,
-      isDefault: i === 0,
-      connected: true,
-    }))
-    const { container } = render(
-      <TerminalTabBar
-        terminals={terminals}
-        activeId="t-0"
-        onSelect={vi.fn()}
-        onCreate={vi.fn()}
-        onClose={vi.fn()}
-        maxTerminals={5}
-      />
-    )
-    expect(container.querySelector('[title="New terminal"]')).toBeNull()
-  })
-
-  it('shows + button when under max', () => {
+  it('always shows + button', () => {
     const { container } = render(
       <TerminalTabBar
         terminals={[defaultTerminal]}

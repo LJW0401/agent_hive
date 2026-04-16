@@ -202,3 +202,53 @@ export async function hasProcess(containerID: string, terminalID: string): Promi
   const data = await res.json()
   return data.hasProcess ?? false
 }
+
+// --- File Browser API ---
+
+export interface FileEntry {
+  name: string
+  type: 'dir' | 'file'
+  size: number
+}
+
+export interface FileContent {
+  type: 'text' | 'markdown' | 'image' | 'pdf' | 'binary'
+  content?: string
+  truncated?: boolean
+  language?: string
+  mimeType?: string
+}
+
+export async function getCWD(containerID: string): Promise<string> {
+  const res = await fetch(`/api/containers/${containerID}/cwd`, {
+    headers: authHeaders(),
+  })
+  if (!res.ok) throw new Error(await res.text())
+  const data = await res.json()
+  return data.cwd
+}
+
+export async function listFiles(containerID: string, path: string = '.'): Promise<FileEntry[]> {
+  const res = await fetch(`/api/containers/${containerID}/files?path=${encodeURIComponent(path)}`, {
+    headers: authHeaders(),
+  })
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}
+
+export async function getFileContent(containerID: string, path: string, maxLines?: number): Promise<FileContent> {
+  let url = `/api/containers/${containerID}/files/content?path=${encodeURIComponent(path)}`
+  if (maxLines) url += `&maxLines=${maxLines}`
+  const res = await fetch(url, {
+    headers: authHeaders(),
+  })
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}
+
+export function getRawFileUrl(containerID: string, path: string): string {
+  const token = getAuthToken()
+  let url = `/api/containers/${containerID}/files/raw?path=${encodeURIComponent(path)}`
+  if (token) url += `&token=${token}`
+  return url
+}

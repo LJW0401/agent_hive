@@ -31,6 +31,13 @@ export function useTerminalTabs(containerID: string, terminalRefreshKey?: number
     })
   }, [containerID, terminalRefreshKey])
 
+  // Guard: if activeTerminalId points to a terminal that no longer exists, fall back to default
+  useEffect(() => {
+    if (terminals.length > 0 && activeTerminalId && !terminals.find(t => t.id === activeTerminalId)) {
+      setActiveTerminalId(terminals.find(t => t.isDefault)?.id ?? terminals[0].id)
+    }
+  }, [terminals, activeTerminalId])
+
   const handleCreateTerminal = useCallback(async () => {
     try {
       const term = await createTerminal(containerID)
