@@ -84,11 +84,15 @@ func New(devMode bool, mgr *container.Manager, db *store.Store, am *auth.Manager
 			return
 		}
 
-		// /api/containers/{id}/files[/content]
+		// /api/containers/{id}/files[/content|/raw]
 		if len(parts) >= 2 && parts[1] == "files" {
 			containerID := parts[0]
 			if len(parts) == 3 && parts[2] == "content" && r.Method == http.MethodGet {
 				getFileContentHandler(mgr, containerID, w, r)
+				return
+			}
+			if len(parts) == 3 && parts[2] == "raw" && r.Method == http.MethodGet {
+				getRawFileHandler(mgr, containerID, w, r)
 				return
 			}
 			if len(parts) == 2 && r.Method == http.MethodGet {
@@ -815,6 +819,32 @@ func getFileContentHandler(mgr *container.Manager, containerID string, w http.Re
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func getRawFileHandler(mgr *container.Manager, containerID string, w http.ResponseWriter, r *http.Request) {
+	cwd, err := mgr.GetCWD(containerID)
+	if err != nil {
+		if errors.Is(err, container.ErrContainerNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	relPath := r.URL.Query().Get("path")
+	if relPath == "" {
+		http.Error(w, "path parameter required", http.StatusBadRequest)
+		return
+	}
+
+	absPath, err := fileutil.SafeJoin(cwd, relPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	http.ServeFile(w, r, absPath)
 }
 
 func getMaxLines(r *http.Request) int {

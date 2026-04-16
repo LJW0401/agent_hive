@@ -39,6 +39,8 @@ export default function MobileFileBrowser({ containerId }: MobileFileBrowserProp
           <FilePreview
             content={fileBrowser.fileContent}
             fileName={fileName}
+            filePath={fileBrowser.selectedFile}
+            containerId={containerId}
             loading={fileBrowser.loading}
           />
         </div>

@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { FileQuestion, AlertTriangle } from 'lucide-react'
+import { getRawFileUrl } from '../api'
 import type { FileContent } from '../api'
 
 // Lazy-loaded Shiki highlighter (singleton)
@@ -23,6 +24,8 @@ function getHighlighter() {
 interface FilePreviewProps {
   content: FileContent | null
   fileName: string | null
+  filePath: string | null
+  containerId: string
   loading?: boolean
 }
 
@@ -120,95 +123,18 @@ function ImagePreview({ content, mimeType }: { content: string; mimeType?: strin
   )
 }
 
-function base64ToBlob(base64: string, mimeType: string): string {
-  const bytes = atob(base64)
-  const arr = new Uint8Array(bytes.length)
-  for (let i = 0; i < bytes.length; i++) {
-    arr[i] = bytes.charCodeAt(i)
-  }
-  const blob = new Blob([arr], { type: mimeType })
-  return URL.createObjectURL(blob)
-}
-
-function PdfPreview({ content }: { content: string }) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [PdfComponents, setPdfComponents] = useState<{
-    Document: typeof import('react-pdf').Document
-    Page: typeof import('react-pdf').Page
-  } | null>(null)
-  const [numPages, setNumPages] = useState(0)
-  const [containerWidth, setContainerWidth] = useState(600)
-  const [blobUrl, setBlobUrl] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    import('react-pdf').then(async (mod) => {
-      if (cancelled) return
-      // Import worker via Vite ?url
-      const workerModule = await import('pdfjs-dist/build/pdf.worker.min.mjs?url')
-      mod.pdfjs.GlobalWorkerOptions.workerSrc = workerModule.default
-      setPdfComponents({ Document: mod.Document, Page: mod.Page })
-    })
-    return () => { cancelled = true }
-  }, [])
-
-  // Convert base64 to blob URL for better compatibility
-  useEffect(() => {
-    const url = base64ToBlob(content, 'application/pdf')
-    setBlobUrl(url)
-    return () => URL.revokeObjectURL(url)
-  }, [content])
-
-  useEffect(() => {
-    if (!containerRef.current) return
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        setContainerWidth(entry.contentRect.width - 32)
-      }
-    })
-    observer.observe(containerRef.current)
-    return () => observer.disconnect()
-  }, [])
-
-  if (!PdfComponents || !blobUrl) {
-    return <div className="p-4 text-[12px] text-gray-400">Loading PDF viewer...</div>
-  }
-
-  const { Document, Page } = PdfComponents
-
+function PdfPreview({ containerId, filePath }: { containerId: string; filePath: string }) {
+  const url = getRawFileUrl(containerId, filePath)
   return (
-    <div className="flex flex-col h-full">
-      {numPages > 0 && (
-        <div className="flex items-center justify-center py-1 border-b border-gray-800 bg-[#0c0c0e]">
-          <span className="text-[10px] text-gray-500">{numPages} pages</span>
-        </div>
-      )}
-      <div ref={containerRef} className="flex-1 overflow-auto">
-        <div className="flex flex-col items-center gap-2 p-4">
-          <Document
-            file={blobUrl}
-            onLoadSuccess={({ numPages: n }) => setNumPages(n)}
-            loading={<div className="text-[12px] text-gray-400">Loading PDF...</div>}
-            error={<div className="text-[12px] text-red-400">Failed to load PDF</div>}
-          >
-            {Array.from({ length: numPages }, (_, i) => (
-              <Page
-                key={i + 1}
-                pageNumber={i + 1}
-                width={Math.min(containerWidth, 900)}
-                renderTextLayer={true}
-                renderAnnotationLayer={true}
-                className="shadow-lg mb-2"
-              />
-            ))}
-          </Document>
-        </div>
-      </div>
-    </div>
+    <iframe
+      src={url}
+      className="w-full h-full border-0"
+      title="PDF Preview"
+    />
   )
 }
 
-export default function FilePreview({ content, fileName, loading }: FilePreviewProps) {
+export default function FilePreview({ content, fileName, filePath, containerId, loading }: FilePreviewProps) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full text-[12px] text-gray-500">
@@ -244,8 +170,8 @@ export default function FilePreview({ content, fileName, loading }: FilePreviewP
       {content.type === 'image' && (
         <ImagePreview content={content.content || ''} mimeType={content.mimeType} />
       )}
-      {content.type === 'pdf' && (
-        <PdfPreview content={content.content || ''} />
+      {content.type === 'pdf' && filePath && (
+        <PdfPreview containerId={containerId} filePath={filePath} />
       )}
       {content.type === 'binary' && (
         <div className="flex flex-col items-center justify-center h-full gap-2 text-gray-500">

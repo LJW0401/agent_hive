@@ -245,3 +245,10 @@ export async function getFileContent(containerID: string, path: string, maxLines
   if (!res.ok) throw new Error(await res.text())
   return res.json()
 }
+
+export function getRawFileUrl(containerID: string, path: string): string {
+  const token = getAuthToken()
+  let url = `/api/containers/${containerID}/files/raw?path=${encodeURIComponent(path)}`
+  if (token) url += `&token=${token}`
+  return url
+}

@@ -62,7 +62,7 @@ export default function FileBrowser({
       />
 
       <div className="flex-1 min-w-0 overflow-hidden">
-        <FilePreview content={fileContent} fileName={fileName} loading={loading} />
+        <FilePreview content={fileContent} fileName={fileName} filePath={selectedFile} containerId={containerId} loading={loading} />
       </div>
     </div>
   )
