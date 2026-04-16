@@ -20,6 +20,7 @@ interface MobileProjectViewProps {
   total: number
   onMoveLeft?: () => void
   onMoveRight?: () => void
+  onViewModeChange?: (mode: 'terminal' | 'files') => void
 }
 
 export default function MobileProjectView({
@@ -33,6 +34,7 @@ export default function MobileProjectView({
   total,
   onMoveLeft,
   onMoveRight,
+  onViewModeChange,
 }: MobileProjectViewProps) {
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(container.name)
@@ -51,8 +53,12 @@ export default function MobileProjectView({
   } = useTerminalTabs(container.id, terminalRefreshKey)
 
   const toggleViewMode = useCallback(() => {
-    setViewMode(prev => prev === 'terminal' ? 'files' : 'terminal')
-  }, [])
+    setViewMode(prev => {
+      const next = prev === 'terminal' ? 'files' : 'terminal'
+      onViewModeChange?.(next)
+      return next
+    })
+  }, [onViewModeChange])
 
   useEffect(() => {
     setName(container.name)

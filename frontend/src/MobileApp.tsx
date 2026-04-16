@@ -27,6 +27,7 @@ export default function MobileApp() {
   const [terminalRefresh, setTerminalRefresh] = useState<Record<string, number>>({})
   const swiperRef = useRef<SwiperType | null>(null)
   const pendingSlideIdRef = useRef<string | null>(null)
+  const [swiperEnabled, setSwiperEnabled] = useState(true)
 
   const connectNotifyWS = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -175,6 +176,18 @@ export default function MobileApp() {
     setTimeout(() => swiperRef.current?.slideTo(index - 1), 100)
   }, [sortedContainers, loadData])
 
+  const handleViewModeChange = useCallback((mode: 'terminal' | 'files') => {
+    const enabled = mode === 'terminal'
+    setSwiperEnabled(enabled)
+    if (swiperRef.current) {
+      if (enabled) {
+        swiperRef.current.allowTouchMove = true
+      } else {
+        swiperRef.current.allowTouchMove = false
+      }
+    }
+  }, [])
+
   const handleMoveRight = useCallback(async (index: number) => {
     if (index >= sortedContainers.length - 1) return
     const reordered = [...sortedContainers]
@@ -209,6 +222,7 @@ export default function MobileApp() {
         spaceBetween={0}
         slidesPerView={1}
         touchAngle={45}
+        allowTouchMove={swiperEnabled}
         className="flex-1 w-full"
       >
         {sortedContainers.map((container, idx) => (
@@ -224,6 +238,7 @@ export default function MobileApp() {
               total={sortedContainers.length}
               onMoveLeft={() => handleMoveLeft(idx)}
               onMoveRight={() => handleMoveRight(idx)}
+              onViewModeChange={handleViewModeChange}
             />
           </SwiperSlide>
         ))}
