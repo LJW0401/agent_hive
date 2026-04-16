@@ -1,11 +1,13 @@
-import { useState, useRef, useEffect } from 'react'
-import { X, Pencil, Check, ChevronLeft, ChevronRight } from 'lucide-react'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { X, Pencil, Check, ChevronLeft, ChevronRight, FolderOpen, TerminalSquare } from 'lucide-react'
 import Terminal from './Terminal'
 import TerminalTabBar from './TerminalTabBar'
 import ConfirmDialog from './ConfirmDialog'
 import ShortcutBar from './ShortcutBar'
 import TodoList from './TodoList'
+import MobileFileBrowser from './MobileFileBrowser'
 import { useTerminalTabs } from '../hooks/useTerminalTabs'
+import { getCWD } from '../api'
 import type { Container } from '../api'
 
 interface MobileProjectViewProps {
@@ -40,12 +42,29 @@ export default function MobileProjectView({
   const splitContainerRef = useRef<HTMLDivElement>(null)
   const draggingRef = useRef(false)
 
+  const [viewMode, setViewMode] = useState<'terminal' | 'files'>('terminal')
+  const [fileBrowserRoot, setFileBrowserRoot] = useState('')
+
   const {
     terminals, activeTerminalId, setActiveTerminalId,
     confirmClose, terminalRefs,
     handleCreateTerminal, handleCloseTerminal, doCloseTerminal, cancelClose,
     sendToActive,
   } = useTerminalTabs(container.id, terminalRefreshKey)
+
+  const toggleViewMode = useCallback(async () => {
+    if (viewMode === 'terminal') {
+      try {
+        const cwd = await getCWD(container.id)
+        setFileBrowserRoot(cwd)
+        setViewMode('files')
+      } catch (e) {
+        console.error('Failed to get CWD:', e)
+      }
+    } else {
+      setViewMode('terminal')
+    }
+  }, [viewMode, container.id])
 
   useEffect(() => {
     setName(container.name)
@@ -126,6 +145,13 @@ export default function MobileProjectView({
         )}
         <div className="flex items-center gap-1 ml-2 shrink-0">
           <button
+            onClick={toggleViewMode}
+            className="text-gray-600 hover:text-gray-300 p-1"
+            title={viewMode === 'terminal' ? 'Browse files' : 'Back to terminal'}
+          >
+            {viewMode === 'terminal' ? <FolderOpen size={14} /> : <TerminalSquare size={14} />}
+          </button>
+          <button
             onClick={onMoveLeft}
             disabled={!onMoveLeft || index === 0}
             className="text-gray-600 hover:text-gray-400 disabled:text-gray-800 disabled:cursor-not-allowed p-1"
@@ -151,10 +177,17 @@ export default function MobileProjectView({
         </div>
       </div>
 
+      {/* File browser mode */}
+      {viewMode === 'files' && fileBrowserRoot && (
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <MobileFileBrowser containerId={container.id} rootPath={fileBrowserRoot} />
+        </div>
+      )}
+
       {/* Split pane: terminal (top) + todo (bottom) */}
       <div
         ref={splitContainerRef}
-        className="flex flex-col flex-1 min-h-0"
+        className={`flex flex-col flex-1 min-h-0 ${viewMode === 'files' ? 'hidden' : ''}`}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
       >
