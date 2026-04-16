@@ -729,7 +729,28 @@ func getFileContentHandler(mgr *container.Manager, containerID string, w http.Re
 
 	switch ft {
 	case "binary":
-		resp = fileContentResponse{Type: "binary"}
+		// Double-check with content sniffing — some files with unknown extensions are actually text
+		isBin, err := fileutil.IsBinary(absPath)
+		if err != nil {
+			http.Error(w, "failed to read file", http.StatusInternalServerError)
+			return
+		}
+		if isBin {
+			resp = fileContentResponse{Type: "binary"}
+		} else {
+			maxLines := getMaxLines(r)
+			content, truncated, err := fileutil.ReadTailLines(absPath, maxLines)
+			if err != nil {
+				http.Error(w, "failed to read file", http.StatusInternalServerError)
+				return
+			}
+			resp = fileContentResponse{
+				Type:      "text",
+				Content:   content,
+				Truncated: truncated,
+				Language:  fileutil.LanguageFromExt(fileName),
+			}
+		}
 
 	case "image":
 		data, err := readFileLimited(absPath, 10*1024*1024) // 10MB limit

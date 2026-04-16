@@ -168,7 +168,13 @@ func FileType(name string) string {
 	case "makefile", "dockerfile", "vagrantfile", "gemfile", "rakefile",
 		"procfile", "brewfile", "justfile", "taskfile",
 		".gitignore", ".gitattributes", ".dockerignore", ".editorconfig",
-		".eslintrc", ".prettierrc", ".babelrc":
+		".eslintrc", ".prettierrc", ".babelrc",
+		".bashrc", ".bash_profile", ".bash_logout", ".bash_aliases",
+		".zshrc", ".zshenv", ".zprofile", ".zlogin", ".zlogout",
+		".profile", ".inputrc", ".vimrc", ".nanorc", ".tmux.conf",
+		".wgetrc", ".curlrc", ".npmrc", ".yarnrc",
+		"license", "licence", "authors", "contributors", "changelog",
+		"todo", "readme", "news", "history", "install":
 		return "text"
 	}
 
