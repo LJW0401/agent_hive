@@ -41,8 +41,8 @@ func HandleNotify(am *auth.Manager) http.HandlerFunc {
 	}
 }
 
-// HandleTerminal connects a WebSocket to a container's PTY.
-// All authenticated devices can both read and write.
+// HandleTerminal connects a WebSocket to a container's terminal PTY.
+// Query params: id (container ID, required), tid (terminal ID, optional — defaults to default terminal).
 func HandleTerminal(mgr *container.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		containerID := r.URL.Query().Get("id")
@@ -55,6 +55,25 @@ func HandleTerminal(mgr *container.Manager) http.HandlerFunc {
 		if !ok {
 			http.Error(w, "container not found", http.StatusNotFound)
 			return
+		}
+
+		// Resolve terminal
+		terminalID := r.URL.Query().Get("tid")
+		var term *container.Terminal
+		if terminalID != "" {
+			term, ok = c.GetTerminal(terminalID)
+			if !ok {
+				http.Error(w, "terminal not found", http.StatusNotFound)
+				return
+			}
+		} else {
+			// Default terminal (backward compat)
+			term = c.GetDefaultTerminal()
+			if term == nil {
+				http.Error(w, "no default terminal", http.StatusNotFound)
+				return
+			}
+			terminalID = term.ID
 		}
 
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -71,19 +90,19 @@ func HandleTerminal(mgr *container.Manager) http.HandlerFunc {
 		}
 
 		// Send terminal history
-		history, err := mgr.ReadHistory(containerID)
+		history, err := mgr.ReadHistory(containerID, terminalID)
 		if err == nil && len(history) > 0 {
 			writeMsg(websocket.BinaryMessage, history)
 		}
 
 		// If terminal disconnected, send status and close
-		if !c.Connected {
+		if !term.Connected {
 			writeMsg(websocket.TextMessage, []byte(`{"type":"status","connected":false}`))
 			conn.Close()
 			return
 		}
 
-		// Register listener: PTY output -> this WebSocket
+		// Register listener on the terminal (not container)
 		listener := container.NewListener(
 			func(data []byte) {
 				if err := writeMsg(websocket.BinaryMessage, data); err != nil {
@@ -95,10 +114,10 @@ func HandleTerminal(mgr *container.Manager) http.HandlerFunc {
 				conn.Close()
 			},
 		)
-		c.AddListener(listener)
+		term.AddListener(listener)
 
 		defer func() {
-			c.RemoveListener(listener)
+			term.RemoveListener(listener)
 			conn.Close()
 		}()
 
@@ -115,14 +134,14 @@ func HandleTerminal(mgr *container.Manager) http.HandlerFunc {
 			if msgType == websocket.TextMessage {
 				var resize resizeMsg
 				if err := json.Unmarshal(msg, &resize); err == nil && resize.Type == "resize" {
-					if err := c.ResizePTY(resize.Rows, resize.Cols); err != nil {
+					if err := term.ResizePTY(resize.Rows, resize.Cols); err != nil {
 						log.Printf("pty resize error: %v", err)
 					}
 					continue
 				}
 			}
 
-			if _, err := c.WriteToPTY(msg); err != nil {
+			if _, err := term.WriteToPTY(msg); err != nil {
 				log.Printf("pty write error: %v", err)
 				return
 			}

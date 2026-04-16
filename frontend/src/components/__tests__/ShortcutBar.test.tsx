@@ -15,6 +15,7 @@ describe('ShortcutBar', () => {
     expect(screen.getByText('↓')).toBeTruthy()
     expect(screen.getByText('←')).toBeTruthy()
     expect(screen.getByText('→')).toBeTruthy()
+    expect(screen.getByText('Enter')).toBeTruthy()
     expect(screen.getByText('Paste')).toBeTruthy()
   })
 
@@ -61,5 +62,12 @@ describe('ShortcutBar', () => {
 
     fireEvent.click(screen.getByText('→'))
     expect(onSend).toHaveBeenCalledWith('\x1b[C')
+  })
+
+  it('sends carriage return for Enter', () => {
+    const onSend = vi.fn()
+    render(<ShortcutBar onSend={onSend} />)
+    fireEvent.click(screen.getByText('Enter'))
+    expect(onSend).toHaveBeenCalledWith('\r')
   })
 })

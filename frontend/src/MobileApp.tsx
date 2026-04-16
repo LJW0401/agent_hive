@@ -24,6 +24,7 @@ export default function MobileApp() {
   const [containers, setContainers] = useState<Container[]>([])
   const [mobileLayout, setMobileLayout] = useState<MobileLayoutEntry[]>([])
   const [todoRefresh, setTodoRefresh] = useState<Record<string, number>>({})
+  const [terminalRefresh, setTerminalRefresh] = useState<Record<string, number>>({})
   const swiperRef = useRef<SwiperType | null>(null)
   const pendingSlideIdRef = useRef<string | null>(null)
 
@@ -36,6 +37,12 @@ export default function MobileApp() {
         const msg = JSON.parse(event.data)
         if (msg.type === 'todos-updated' && msg.containerId) {
           setTodoRefresh((prev) => ({
+            ...prev,
+            [msg.containerId]: (prev[msg.containerId] ?? 0) + 1,
+          }))
+        }
+        if (msg.type === 'terminals-changed' && msg.containerId) {
+          setTerminalRefresh((prev) => ({
             ...prev,
             [msg.containerId]: (prev[msg.containerId] ?? 0) + 1,
           }))
@@ -212,6 +219,7 @@ export default function MobileApp() {
               onRename={handleRename}
               onStatusChange={handleStatusChange}
               todoRefreshKey={todoRefresh[container.id] ?? 0}
+              terminalRefreshKey={terminalRefresh[container.id] ?? 0}
               index={idx}
               total={sortedContainers.length}
               onMoveLeft={() => handleMoveLeft(idx)}

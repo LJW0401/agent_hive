@@ -1,8 +1,11 @@
 import { useState, useRef, useEffect } from 'react'
 import { X, Pencil, Check, ChevronLeft, ChevronRight } from 'lucide-react'
-import Terminal, { type TerminalHandle } from './Terminal'
+import Terminal from './Terminal'
+import TerminalTabBar from './TerminalTabBar'
+import ConfirmDialog from './ConfirmDialog'
 import ShortcutBar from './ShortcutBar'
 import TodoList from './TodoList'
+import { useTerminalTabs } from '../hooks/useTerminalTabs'
 import type { Container } from '../api'
 
 interface MobileProjectViewProps {
@@ -11,6 +14,7 @@ interface MobileProjectViewProps {
   onRename: (id: string, name: string) => void
   onStatusChange: (id: string, connected: boolean) => void
   todoRefreshKey?: number
+  terminalRefreshKey?: number
   index: number
   total: number
   onMoveLeft?: () => void
@@ -23,6 +27,7 @@ export default function MobileProjectView({
   onRename,
   onStatusChange,
   todoRefreshKey,
+  terminalRefreshKey,
   index,
   total,
   onMoveLeft,
@@ -31,10 +36,16 @@ export default function MobileProjectView({
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(container.name)
   const inputRef = useRef<HTMLInputElement>(null)
-  const terminalRef = useRef<TerminalHandle>(null)
-  const [splitRatio, setSplitRatio] = useState(0.5)
+  const [splitRatio, setSplitRatio] = useState(0.7) // 7/3 default: terminal 70%, todo 30%
   const splitContainerRef = useRef<HTMLDivElement>(null)
   const draggingRef = useRef(false)
+
+  const {
+    terminals, activeTerminalId, setActiveTerminalId,
+    confirmClose, terminalRefs,
+    handleCreateTerminal, handleCloseTerminal, doCloseTerminal, cancelClose,
+    sendToActive,
+  } = useTerminalTabs(container.id, terminalRefreshKey)
 
   useEffect(() => {
     setName(container.name)
@@ -57,12 +68,10 @@ export default function MobileProjectView({
     setEditing(false)
   }
 
-  const handleSendData = (data: string) => {
-    terminalRef.current?.sendData(data)
-  }
-
   // Split pane touch handlers
-  const MIN_PX = 30
+  // Terminal min 40%, todo min 15%
+  const MIN_TERMINAL_RATIO = 0.40
+  const MAX_TERMINAL_RATIO = 0.85 // 1 - 0.15
 
   const handleTouchStart = (e: React.TouchEvent) => {
     e.stopPropagation()
@@ -74,10 +83,8 @@ export default function MobileProjectView({
     e.stopPropagation()
     const rect = splitContainerRef.current.getBoundingClientRect()
     const y = e.touches[0].clientY - rect.top
-    const total = rect.height
-    const minRatio = MIN_PX / total
-    const maxRatio = 1 - MIN_PX / total
-    setSplitRatio(Math.min(maxRatio, Math.max(minRatio, y / total)))
+    const ratio = y / rect.height
+    setSplitRatio(Math.min(MAX_TERMINAL_RATIO, Math.max(MIN_TERMINAL_RATIO, ratio)))
   }
 
   const handleTouchEnd = () => {
@@ -151,17 +158,42 @@ export default function MobileProjectView({
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
       >
-        {/* Terminal */}
+        {/* Terminal area */}
         <div style={{ height: `${splitRatio * 100}%` }} className="min-h-0 overflow-hidden flex flex-col">
-          <div className="flex-1 min-h-0">
-            <Terminal
-              ref={terminalRef}
-              containerId={container.id}
-              connected={container.connected}
-              onReconnected={() => onStatusChange(container.id, true)}
+          {/* Terminal tabs */}
+          {terminals.length > 0 && (
+            <TerminalTabBar
+              terminals={terminals}
+              activeId={activeTerminalId}
+              onSelect={setActiveTerminalId}
+              onCreate={handleCreateTerminal}
+              onClose={handleCloseTerminal}
             />
+          )}
+          {/* Terminal content */}
+          <div className="flex-1 min-h-0 relative">
+            {terminals.map((t) => (
+              <div
+                key={t.id}
+                className="absolute inset-0"
+                style={{ display: t.id === activeTerminalId ? 'block' : 'none' }}
+              >
+                <Terminal
+                  ref={(handle) => {
+                    if (handle) terminalRefs.current.set(t.id, handle)
+                    else terminalRefs.current.delete(t.id)
+                  }}
+                  containerId={container.id}
+                  terminalId={t.id}
+                  connected={t.connected}
+                  active={t.id === activeTerminalId}
+                  isDefault={t.isDefault}
+                  onReconnected={() => onStatusChange(container.id, true)}
+                />
+              </div>
+            ))}
           </div>
-          <ShortcutBar onSend={handleSendData} />
+          <ShortcutBar onSend={sendToActive} />
         </div>
 
         {/* Drag handle */}
@@ -177,6 +209,14 @@ export default function MobileProjectView({
           <TodoList containerID={container.id} refreshKey={todoRefreshKey} />
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmClose !== null}
+        title="Close terminal?"
+        message="This terminal has a running process. Are you sure you want to close it?"
+        onConfirm={() => confirmClose && doCloseTerminal(confirmClose)}
+        onCancel={cancelClose}
+      />
     </div>
   )
 }

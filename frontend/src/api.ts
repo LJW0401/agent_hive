@@ -158,3 +158,47 @@ export async function reorderTodos(containerID: string, ids: number[]): Promise<
     body: JSON.stringify({ ids }),
   })
 }
+
+// --- Terminal API ---
+
+export interface TerminalInfo {
+  id: string
+  name: string
+  isDefault: boolean
+  connected: boolean
+}
+
+export async function listTerminals(containerID: string): Promise<TerminalInfo[]> {
+  const res = await fetch(`/api/containers/${containerID}/terminals`, { headers: authHeaders() })
+  const data = await res.json()
+  return data ?? []
+}
+
+export async function createTerminal(containerID: string): Promise<TerminalInfo> {
+  const res = await fetch(`/api/containers/${containerID}/terminals`, {
+    method: 'POST',
+    headers: authHeaders(),
+  })
+  if (!res.ok) {
+    throw new Error(await res.text())
+  }
+  return res.json()
+}
+
+export async function deleteTerminal(containerID: string, terminalID: string): Promise<void> {
+  const res = await fetch(`/api/containers/${containerID}/terminals/${terminalID}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  if (!res.ok) {
+    throw new Error(await res.text())
+  }
+}
+
+export async function hasProcess(containerID: string, terminalID: string): Promise<boolean> {
+  const res = await fetch(`/api/containers/${containerID}/terminals/${terminalID}/has-process`, {
+    headers: authHeaders(),
+  })
+  const data = await res.json()
+  return data.hasProcess ?? false
+}

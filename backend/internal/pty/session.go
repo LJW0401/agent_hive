@@ -150,3 +150,11 @@ func (s *Session) Wait() error {
 func (s *Session) Reader() io.Reader {
 	return s.ptmx
 }
+
+// PID returns the PID of the shell process, or 0 if not running.
+func (s *Session) PID() int {
+	if s.cmd != nil && s.cmd.Process != nil {
+		return s.cmd.Process.Pid
+	}
+	return 0
+}

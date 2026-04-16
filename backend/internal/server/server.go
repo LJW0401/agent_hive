@@ -2,9 +2,12 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 
@@ -68,7 +71,48 @@ func New(devMode bool, mgr *container.Manager, db *store.Store, am *auth.Manager
 			return
 		}
 
-		id := path
+		// /api/containers/{id}/terminals[/{tid}[/has-process]]
+		parts := strings.SplitN(path, "/", 3)
+		if len(parts) >= 2 && parts[1] == "terminals" {
+			containerID := parts[0]
+			broadcastTerminalChange := func() {
+				am.Broadcast([]byte(`{"type":"terminals-changed","containerId":"` + containerID + `"}`))
+			}
+
+			if len(parts) == 2 {
+				// /api/containers/{id}/terminals
+				switch r.Method {
+				case http.MethodGet:
+					listTerminals(mgr, containerID, w)
+				case http.MethodPost:
+					createTerminalHandler(mgr, containerID, w)
+					broadcastTerminalChange()
+				default:
+					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				}
+				return
+			}
+
+			// /api/containers/{id}/terminals/{tid}[/has-process]
+			tidPath := parts[2]
+			if strings.HasSuffix(tidPath, "/has-process") && r.Method == http.MethodGet {
+				tid := strings.TrimSuffix(tidPath, "/has-process")
+				hasProcessHandler(mgr, containerID, tid, w)
+				return
+			}
+
+			tid := tidPath
+			switch r.Method {
+			case http.MethodDelete:
+				deleteTerminalHandler(mgr, containerID, tid, w)
+				broadcastTerminalChange()
+			default:
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
+
+		id := parts[0]
 		switch r.Method {
 		case http.MethodDelete:
 			deleteContainer(mgr, db, id, w)
@@ -257,6 +301,7 @@ func deleteContainer(mgr *container.Manager, db *store.Store, id string, w http.
 	}
 	_ = db.DeleteContainerMeta(id)
 	_ = db.DeleteTodosByContainer(id)
+	_ = db.DeleteTerminalsByContainer(id)
 	_ = db.RemoveLayoutEntry(id)
 	_ = db.RemoveMobileLayoutEntry(id)
 	w.WriteHeader(http.StatusNoContent)
@@ -434,4 +479,107 @@ func updateMobileLayout(db *store.Store, w http.ResponseWriter, r *http.Request)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Terminal handlers ---
+
+type terminalResponse struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	IsDefault bool   `json:"isDefault"`
+	Connected bool   `json:"connected"`
+}
+
+func listTerminals(mgr *container.Manager, containerID string, w http.ResponseWriter) {
+	c, ok := mgr.Get(containerID)
+	if !ok {
+		http.Error(w, "container not found", http.StatusNotFound)
+		return
+	}
+
+	terms := c.ListTerminals()
+	resp := make([]terminalResponse, 0, len(terms))
+	for _, t := range terms {
+		resp = append(resp, terminalResponse{
+			ID:        t.ID,
+			Name:      t.Name,
+			IsDefault: t.IsDefault,
+			Connected: t.Connected,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func createTerminalHandler(mgr *container.Manager, containerID string, w http.ResponseWriter) {
+	term, err := mgr.CreateTerminal(containerID)
+	if err != nil {
+		switch {
+		case errors.Is(err, container.ErrTerminalLimit):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		case errors.Is(err, container.ErrContainerNotFound):
+			http.Error(w, err.Error(), http.StatusNotFound)
+		default:
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(terminalResponse{
+		ID:        term.ID,
+		Name:      term.Name,
+		IsDefault: term.IsDefault,
+		Connected: term.Connected,
+	})
+}
+
+func deleteTerminalHandler(mgr *container.Manager, containerID, terminalID string, w http.ResponseWriter) {
+	err := mgr.DeleteTerminal(containerID, terminalID)
+	if err != nil {
+		switch {
+		case errors.Is(err, container.ErrDefaultTerminal):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		case errors.Is(err, container.ErrContainerNotFound), errors.Is(err, container.ErrTerminalNotFound):
+			http.Error(w, err.Error(), http.StatusNotFound)
+		default:
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func hasProcessHandler(mgr *container.Manager, containerID, terminalID string, w http.ResponseWriter) {
+	c, ok := mgr.Get(containerID)
+	if !ok {
+		http.Error(w, "container not found", http.StatusNotFound)
+		return
+	}
+
+	term, ok := c.GetTerminal(terminalID)
+	if !ok {
+		http.Error(w, "terminal not found", http.StatusNotFound)
+		return
+	}
+
+	hasChild := HasChildProcess(term.ProcessPID())
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"hasProcess": hasChild})
+}
+
+// HasChildProcess checks if a process has child processes by reading /proc/{pid}/children.
+func HasChildProcess(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	// Try /proc/{pid}/task/{pid}/children first (Linux-specific)
+	childrenPath := fmt.Sprintf("/proc/%d/task/%d/children", pid, pid)
+	data, err := os.ReadFile(childrenPath)
+	if err != nil {
+		// Fallback: if we can't read, assume process has children (safer to confirm)
+		return true
+	}
+	return len(strings.TrimSpace(string(data))) > 0
 }
