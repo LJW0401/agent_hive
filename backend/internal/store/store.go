@@ -80,7 +80,7 @@ func migrate(db *sql.DB) error {
 		CREATE TABLE IF NOT EXISTS terminals (
 			id           TEXT PRIMARY KEY,
 			container_id TEXT NOT NULL,
-			name         TEXT NOT NULL DEFAULT 'Terminal 1',
+			name         TEXT NOT NULL DEFAULT 'Terminal',
 			is_default   INTEGER NOT NULL DEFAULT 0,
 			sort_order   INTEGER NOT NULL DEFAULT 0,
 			created_at   DATETIME NOT NULL DEFAULT (datetime('now'))
@@ -119,7 +119,7 @@ func (s *Store) migrateTerminals() error {
 		_, err := s.db.Exec(
 			`INSERT INTO terminals (id, container_id, name, is_default, sort_order, created_at)
 			 VALUES (?, ?, ?, 1, 0, ?)`,
-			tid, c.ID, "Terminal 1", now,
+			tid, c.ID, "Terminal", now,
 		)
 		if err != nil {
 			log.Printf("warning: failed to create default terminal for %s: %v", c.ID, err)

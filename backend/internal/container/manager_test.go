@@ -98,7 +98,7 @@ func TestContainerHasDefaultTerminal(t *testing.T) {
 		ID:   "c-1",
 		Name: "Test",
 		terminals: map[string]*Terminal{
-			"t-1": {ID: "t-1", IsDefault: true, Name: "Terminal 1"},
+			"t-1": {ID: "t-1", IsDefault: true, Name: "Terminal"},
 			"t-2": {ID: "t-2", IsDefault: false, Name: "Terminal 2"},
 		},
 	}

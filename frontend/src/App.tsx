@@ -89,6 +89,7 @@ function DesktopApp() {
     return saved === 'single' ? 'single' : 'multi'
   })
   const [focusedContainerId, setFocusedContainerId] = useState<string | null>(null)
+  const [singleDirection, setSingleDirection] = useState(0)
 
   const toggleLayout = useCallback(() => {
     setLayoutMode(prev => {
@@ -117,6 +118,7 @@ function DesktopApp() {
     const idx = sortedContainerIds.indexOf(singleContainerId)
     const next = idx + delta
     if (next >= 0 && next < sortedContainerIds.length) {
+      setSingleDirection(delta)
       setFocusedContainerId(sortedContainerIds[next])
     }
   }, [singleContainerId, sortedContainerIds])
@@ -427,25 +429,42 @@ function DesktopApp() {
         if (el) setFocusedContainerId(el.getAttribute('data-container-id'))
       }}>
         {layoutMode === 'single' && singleContainerId ? (
-          (() => {
-            const c = containers.find(c => c.id === singleContainerId)
-            if (!c) return null
-            const idx = sortedContainerIds.indexOf(singleContainerId)
-            return (
-              <SingleProjectView
-                container={c}
-                onClose={handleClose}
-                onRename={handleRename}
-                onStatusChange={handleStatusChange}
-                todoRefreshKey={todoRefresh[c.id] ?? 0}
-                terminalRefreshKey={terminalRefresh[c.id] ?? 0}
-                canGoLeft={idx > 0}
-                canGoRight={idx < sortedContainerIds.length - 1}
-                onNavigateLeft={() => navigateSingle(-1)}
-                onNavigateRight={() => navigateSingle(1)}
-              />
-            )
-          })()
+          <AnimatePresence initial={false} mode="wait" custom={singleDirection}>
+            {(() => {
+              const c = containers.find(c => c.id === singleContainerId)
+              if (!c) return null
+              const idx = sortedContainerIds.indexOf(singleContainerId)
+              return (
+                <motion.div
+                  key={singleContainerId}
+                  custom={singleDirection}
+                  variants={{
+                    enter: (d: number) => ({ x: d > 0 ? '50%' : '-50%', opacity: 0 }),
+                    center: { x: 0, opacity: 1 },
+                    exit: (d: number) => ({ x: d > 0 ? '-50%' : '50%', opacity: 0 }),
+                  }}
+                  initial="enter"
+                  animate="center"
+                  exit="exit"
+                  transition={{ duration: 0.2, ease: 'easeInOut' }}
+                  className="absolute inset-0"
+                >
+                  <SingleProjectView
+                    container={c}
+                    onClose={handleClose}
+                    onRename={handleRename}
+                    onStatusChange={handleStatusChange}
+                    todoRefreshKey={todoRefresh[c.id] ?? 0}
+                    terminalRefreshKey={terminalRefresh[c.id] ?? 0}
+                    canGoLeft={idx > 0}
+                    canGoRight={idx < sortedContainerIds.length - 1}
+                    onNavigateLeft={() => navigateSingle(-1)}
+                    onNavigateRight={() => navigateSingle(1)}
+                  />
+                </motion.div>
+              )
+            })()}
+          </AnimatePresence>
         ) : (
           <DndContext
             sensors={sensors}
@@ -474,7 +493,7 @@ function DesktopApp() {
                       container ? (
                         <SortableGridItem key={container.id} id={container.id}>
                           {(dragHandleProps) => (
-                            <div data-container-id={container.id}>
+                            <div data-container-id={container.id} className="h-full">
                               <ProjectContainer
                                 container={container}
                                 onClose={handleClose}
