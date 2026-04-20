@@ -1,6 +1,7 @@
 import { isMobile } from './utils/device'
 import MobileApp from './MobileApp'
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import { detectEdgeZone, EDGE_DWELL_MS, EDGE_THRESHOLD_PX, type EdgeZone } from './utils/dragEdge'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   DndContext,
@@ -80,6 +81,9 @@ function DesktopApp() {
   const [currentPage, setCurrentPage] = useState(0)
   const [activeId, setActiveId] = useState<string | null>(null)
   const [direction, setDirection] = useState(0)
+  const [edgeZone, setEdgeZone] = useState<EdgeZone>(null)
+  const edgeZoneRef = useRef<EdgeZone>(null)
+  const edgeTimerRef = useRef<number | null>(null)
   const [todoRefresh, setTodoRefresh] = useState<Record<string, number>>({})
   const [terminalRefresh, setTerminalRefresh] = useState<Record<string, number>>({})
 
@@ -349,6 +353,60 @@ function DesktopApp() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [currentPage, totalPages, handleCreate, goToPage, layoutMode, navigateSingle])
 
+  // Reset edge-dwell state whenever we leave a dwell window (drag ends, zone change, page jump, etc.)
+  const clearEdgeDwell = useCallback(() => {
+    if (edgeTimerRef.current !== null) {
+      window.clearTimeout(edgeTimerRef.current)
+      edgeTimerRef.current = null
+    }
+    edgeZoneRef.current = null
+    setEdgeZone(null)
+  }, [])
+
+  // Drag-to-page-flip: while an item is being dragged, watch the pointer X.
+  // Entering an edge zone shows a marker and starts a dwell timer; after
+  // EDGE_DWELL_MS we move the active container to the neighbouring page and
+  // navigate to it. The ongoing drag is intentionally cancelled by the page
+  // remount (see learnings: "change of rendering topology is outside S scope").
+  useEffect(() => {
+    if (!activeId) {
+      clearEdgeDwell()
+      return
+    }
+    const handlePointerMove = (e: PointerEvent) => {
+      const rawZone = detectEdgeZone(e.clientX, window.innerWidth, EDGE_THRESHOLD_PX)
+      // Suppress the marker when there is no page to flip to in that direction.
+      const canLeft = currentPage > 0
+      const canRight = currentPage < totalPages - 1
+      const zone: EdgeZone =
+        rawZone === 'left' ? (canLeft ? 'left' : null)
+        : rawZone === 'right' ? (canRight ? 'right' : null)
+        : null
+
+      if (zone === edgeZoneRef.current) return
+      edgeZoneRef.current = zone
+      setEdgeZone(zone)
+      if (edgeTimerRef.current !== null) {
+        window.clearTimeout(edgeTimerRef.current)
+        edgeTimerRef.current = null
+      }
+      if (zone !== null) {
+        const target = zone === 'left' ? currentPage - 1 : currentPage + 1
+        const containerId = activeId
+        edgeTimerRef.current = window.setTimeout(() => {
+          moveToPage(containerId, target)
+          goToPage(target)
+          clearEdgeDwell()
+        }, EDGE_DWELL_MS)
+      }
+    }
+    window.addEventListener('pointermove', handlePointerMove)
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      clearEdgeDwell()
+    }
+  }, [activeId, currentPage, totalPages, moveToPage, goToPage, clearEdgeDwell])
+
   const handleLogin = useCallback((token: string) => {
     setAuthToken(token)
     setAuthState('ready')
@@ -526,6 +584,37 @@ function DesktopApp() {
                 </div>
               ) : null}
             </DragOverlay>
+
+            <AnimatePresence>
+              {edgeZone === 'left' && (
+                <motion.div
+                  key="edge-left"
+                  data-edge-marker="left"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12 }}
+                  className="pointer-events-none absolute inset-y-0 left-0 z-40 flex items-center justify-start"
+                  style={{ width: EDGE_THRESHOLD_PX }}
+                >
+                  <div className="w-full h-full bg-gradient-to-r from-sky-500/40 via-sky-500/15 to-transparent animate-pulse" />
+                </motion.div>
+              )}
+              {edgeZone === 'right' && (
+                <motion.div
+                  key="edge-right"
+                  data-edge-marker="right"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12 }}
+                  className="pointer-events-none absolute inset-y-0 right-0 z-40 flex items-center justify-end"
+                  style={{ width: EDGE_THRESHOLD_PX }}
+                >
+                  <div className="w-full h-full bg-gradient-to-l from-sky-500/40 via-sky-500/15 to-transparent animate-pulse" />
+                </motion.div>
+              )}
+            </AnimatePresence>
           </DndContext>
         )}
       </main>
