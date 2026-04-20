@@ -2,6 +2,7 @@ import { isMobile } from './utils/device'
 import MobileApp from './MobileApp'
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { detectEdgeZone, EDGE_DWELL_MS, EDGE_THRESHOLD_PX, type EdgeZone } from './utils/dragEdge'
+import { moveContainerToPage } from './utils/layout'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   DndContext,
@@ -296,17 +297,8 @@ function DesktopApp() {
 
   const moveToPage = useCallback(
     async (containerId: string, targetPage: number) => {
-      const newLayout = compactLayout(
-        layout.map((e) => {
-          if (e.containerId !== containerId) return e
-          const taken = layout
-            .filter((x) => x.page === targetPage && x.containerId !== containerId)
-            .map((x) => x.position)
-          let pos = 0
-          while (taken.includes(pos) && pos < PAGE_SIZE) pos++
-          return { ...e, page: targetPage, position: pos }
-        }),
-      )
+      const newLayout = moveContainerToPage(layout, containerId, targetPage, PAGE_SIZE)
+      if (newLayout === layout) return
       setLayout(newLayout)
       await updateLayout(newLayout)
     },
