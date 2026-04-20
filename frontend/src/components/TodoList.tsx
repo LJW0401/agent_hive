@@ -51,7 +51,7 @@ export default function TodoList({ containerID, refreshKey }: TodoListProps) {
     const content = newContent.trim()
     if (!content) return
     const todo = await createTodo(containerID, content)
-    setTodos((prev) => [...prev, todo])
+    setTodos((prev) => [todo, ...prev])
     setNewContent('')
     inputRef.current?.focus()
   }

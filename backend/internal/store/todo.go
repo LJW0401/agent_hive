@@ -37,17 +37,20 @@ func (s *Store) ListTodos(containerID string) ([]Todo, error) {
 	return todos, rows.Err()
 }
 
-// CreateTodo creates a new todo. SortOrder is set to max+1 within the container.
+// CreateTodo creates a new todo. SortOrder is set to min-1 within the container,
+// so the new item appears at the top of the ASC-ordered list.
 func (s *Store) CreateTodo(containerID, content string) (*Todo, error) {
-	var maxOrder int
+	var minOrder int
 	_ = s.db.QueryRow(
-		`SELECT COALESCE(MAX(sort_order), -1) FROM todos WHERE container = ?`,
+		`SELECT COALESCE(MIN(sort_order), 1) FROM todos WHERE container = ?`,
 		containerID,
-	).Scan(&maxOrder)
+	).Scan(&minOrder)
+
+	newOrder := minOrder - 1
 
 	result, err := s.db.Exec(
 		`INSERT INTO todos (container, content, sort_order) VALUES (?, ?, ?)`,
-		containerID, content, maxOrder+1,
+		containerID, content, newOrder,
 	)
 	if err != nil {
 		return nil, err
@@ -59,7 +62,7 @@ func (s *Store) CreateTodo(containerID, content string) (*Todo, error) {
 		Container: containerID,
 		Content:   content,
 		Done:      false,
-		SortOrder: maxOrder + 1,
+		SortOrder: newOrder,
 		CreatedAt: time.Now(),
 	}, nil
 }
