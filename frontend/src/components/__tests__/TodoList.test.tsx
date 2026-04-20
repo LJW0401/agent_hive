@@ -37,4 +37,27 @@ describe('TodoList text wrapping', () => {
     const todoItems = document.querySelectorAll('.flex.items-start')
     expect(todoItems.length).toBeGreaterThan(0)
   })
+
+  // Smoke: delete button is visible by default on mobile viewports (no hover).
+  it('delete button is visible by default and reverts to hover on md+ breakpoint', async () => {
+    render(<TodoList containerID="test-1" />)
+
+    await screen.findByText('Short todo')
+    // Each todo row renders a delete (Trash2) button; className should make it
+    // visible on mobile (opacity-100) while retaining the desktop hover-only
+    // behaviour (md:opacity-0 + md:group-hover:opacity-100).
+    const deleteButtons = Array.from(
+      document.querySelectorAll('button.text-gray-700.hover\\:text-red-400')
+    )
+    expect(deleteButtons.length).toBeGreaterThan(0)
+
+    for (const btn of deleteButtons) {
+      const cls = btn.className
+      // non-empty: edge — mobile visibility
+      expect(cls).toContain('opacity-100')
+      // non-empty: edge — desktop fallback preserved
+      expect(cls).toContain('md:opacity-0')
+      expect(cls).toContain('md:group-hover:opacity-100')
+    }
+  })
 })

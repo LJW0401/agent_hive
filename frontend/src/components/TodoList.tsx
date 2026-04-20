@@ -204,7 +204,7 @@ function SortableTodoItem({ todo, onToggle, onEdit, onDelete }: SortableTodoItem
 
       <button
         onClick={() => onDelete(todo.id)}
-        className="text-gray-700 hover:text-red-400 p-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+        className="text-gray-700 hover:text-red-400 p-0.5 shrink-0 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity"
       >
         <Trash2 size={10} />
       </button>
