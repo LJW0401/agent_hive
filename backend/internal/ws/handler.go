@@ -89,10 +89,16 @@ func HandleTerminal(mgr *container.Manager) http.HandlerFunc {
 			return conn.WriteMessage(msgType, data)
 		}
 
-		// Send terminal history
+		// Send terminal history. We prepend \x1bc (RIS, full terminal reset) so
+		// xterm.js starts from a clean state: pending SGR / alt-screen / charset
+		// flags from a prior partial connection can't bleed into the replay and
+		// produce a corrupted scrollback.
 		history, err := mgr.ReadHistory(containerID, terminalID)
 		if err == nil && len(history) > 0 {
-			writeMsg(websocket.BinaryMessage, history)
+			bundle := make([]byte, 0, len(history)+2)
+			bundle = append(bundle, 0x1b, 'c')
+			bundle = append(bundle, history...)
+			writeMsg(websocket.BinaryMessage, bundle)
 		}
 
 		// If terminal disconnected, send status and close

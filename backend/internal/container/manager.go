@@ -1,6 +1,7 @@
 package container
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -25,7 +26,17 @@ var (
 
 const defaultHistoryLineLimit = 1000
 const extraHistoryLineLimit = 200
-const historyReplayByteLimit int64 = 256 * 1024
+
+// History replay sizing. Grown from an earlier 256KB cap because TUIs like
+// Claude Code emit tens of KB of cursor-addressable redraws with almost no
+// newlines, so a small tail chopped through alt-screen toggles and left
+// xterm.js replaying a garbled, half-state screen.
+const (
+	historyReplayByteLimit int64 = 1 << 20         // 1MB: default tail when no TUI anchor
+	historyAnchorWindow    int64 = 8 * 1024 * 1024  // 8MB: window we scan for alt-screen toggles
+	historyHardCeiling     int64 = 10 * 1024 * 1024 // 10MB: absolute safety cap on replay payload
+)
+
 const cwdPollInterval = 2 * time.Second
 
 // readProcCWD returns the working directory of the given PID, or "" on failure.
@@ -724,6 +735,47 @@ func (m *Manager) ReadHistory(containerID, terminalID string) ([]byte, error) {
 	return readHistoryFile(m.terminalLogPath(containerID, terminalID), lineLimit)
 }
 
+// altScreenAnchorPatterns are the TUI "enter/exit alternate screen" sequences.
+// When present near the tail of the log, we start replay at the latest one so
+// xterm.js rebuilds the correct screen state; otherwise a naive byte tail
+// ends up splicing into a TUI mid-render and produces a garbled replay.
+var altScreenAnchorPatterns = [][]byte{
+	[]byte("\x1b[?1049h"), []byte("\x1b[?1049l"),
+	[]byte("\x1b[?1047h"), []byte("\x1b[?1047l"),
+	[]byte("\x1b[?47h"), []byte("\x1b[?47l"),
+}
+
+// findLastAltScreenAnchor returns the offset of the latest alt-screen toggle
+// in buf, or -1 if none found.
+func findLastAltScreenAnchor(buf []byte) int {
+	best := -1
+	for _, p := range altScreenAnchorPatterns {
+		if i := bytes.LastIndex(buf, p); i > best {
+			best = i
+		}
+	}
+	return best
+}
+
+// trimToLastLines returns the suffix of buf that contains at most lineLimit
+// newlines. Preserves buf as-is when under the limit or when lineLimit <= 0.
+func trimToLastLines(buf []byte, lineLimit int) []byte {
+	if lineLimit <= 0 {
+		return buf
+	}
+	newlines := 0
+	for i := len(buf) - 1; i >= 0; i-- {
+		if buf[i] != '\n' {
+			continue
+		}
+		newlines++
+		if newlines > lineLimit {
+			return buf[i+1:]
+		}
+	}
+	return buf
+}
+
 func readHistoryFile(path string, lineLimit int) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -735,49 +787,39 @@ func readHistoryFile(path string, lineLimit int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	size := info.Size()
 	if size == 0 {
 		return nil, nil
 	}
 
-	byteStart := size - historyReplayByteLimit
-	if byteStart < 0 {
-		byteStart = 0
+	// Load the anchor search window into memory so we can scan for TUI state
+	// toggles without paging through the file twice.
+	windowStart := size - historyAnchorWindow
+	if windowStart < 0 {
+		windowStart = 0
 	}
-
-	start := byteStart
-	buf := make([]byte, 4096)
-	newlines := 0
-	offset := size
-
-	for offset > byteStart && newlines <= lineLimit {
-		chunkSize := int64(len(buf))
-		if offset-byteStart < chunkSize {
-			chunkSize = offset - byteStart
-		}
-		offset -= chunkSize
-
-		n, err := f.ReadAt(buf[:chunkSize], offset)
-		if err != nil && err != io.EOF {
-			return nil, err
-		}
-
-		for i := n - 1; i >= 0; i-- {
-			if buf[i] != '\n' {
-				continue
-			}
-			newlines++
-			if newlines > lineLimit {
-				start = offset + int64(i) + 1
-				break
-			}
-		}
-	}
-
-	history := make([]byte, size-start)
-	if _, err := f.ReadAt(history, start); err != nil && err != io.EOF {
+	window := make([]byte, size-windowStart)
+	if _, err := f.ReadAt(window, windowStart); err != nil && err != io.EOF {
 		return nil, err
 	}
-	return history, nil
+
+	// Case 1 — TUI toggle present: anchor replay there. This is what makes
+	// Claude Code / vim / less scrollback survive a reopen.
+	if anchor := findLastAltScreenAnchor(window); anchor >= 0 {
+		out := window[anchor:]
+		if int64(len(out)) > historyHardCeiling {
+			out = out[int64(len(out))-historyHardCeiling:]
+		}
+		return append([]byte(nil), out...), nil
+	}
+
+	// Case 2 — no TUI toggle: byte cap + newline trim, same spirit as the
+	// original implementation but with a larger default window.
+	tailStart := size - historyReplayByteLimit
+	if tailStart < windowStart {
+		tailStart = windowStart
+	}
+	tail := window[tailStart-windowStart:]
+	trimmed := trimToLastLines(tail, lineLimit)
+	return append([]byte(nil), trimmed...), nil
 }

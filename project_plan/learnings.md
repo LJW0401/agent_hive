@@ -41,6 +41,27 @@
 - **描述**：SQLite 没有 `ALTER TABLE ADD COLUMN IF NOT EXISTS`，本次用 `PRAGMA table_info` 探测列存在再决定是否 ALTER，是 SQLite 下幂等加列的标准做法。测试覆盖了"幂等"与"老库升级"两类。
 - **建议处理方式**：之后再加列复用 `addTerminalLastCWDColumn` 模式。
 - **紧急程度**：低
+### Bug 修复：TUI (Claude Code / vim) 重连后只剩几十行
+
+- **发现于**：用户手动观察（"有时候只恢复了不到 50 行"）
+- **现象**：在终端里跑 Claude Code / vim 等 TUI 时，reopen 后 xterm.js 只显示半截屏幕（20-50 行），滚动历史基本没了。非 TUI 场景（纯 bash）不受影响。
+- **根因**：TUI 用 `\x1b[?1049h` 切到备用屏，之后用 cursor-addressable 重绘输出大量 ANSI 字节但极少 `\n`。旧的 `readHistoryFile` 只取最后 256KB + 按行数截断——TUI 输出很容易让 256KB 窗口落在 `\x1b[?1049h` 之后，replay 时 xterm.js 看不到"进备用屏"的开关，落在主屏回放残余 ANSI → 屏幕错乱。同时字节窗口切在半截 ANSI 序列里也会让 xterm.js 解析失败。
+- **修复**：三处改动
+  1. `readHistoryFile` 改成"anchor-aware"：在 8MB 窗口里找最近一个 `\x1b[?{47,1047,1049}{h,l}` 开关，如有就从开关处开始返回；没有再走字节/行数兜底。字节兜底从 256KB 抬到 1MB。硬上限 10MB 防跑飞。
+  2. WS handler 回放前加 `\x1bc` (RIS)，让 xterm.js 从零态开始处理 anchor 之后的字节。
+  3. 把 `findLastAltScreenAnchor` / `trimToLastLines` 抽成纯函数方便单测。
+- **回归测试**：
+  - `TestReadHistoryAnchorsOnAltScreenToggle`：550KB 含 1049h 的 log，anchor 丢失前失败（历史里 `[?1049h` 不见），修复后通过。
+  - `TestReadHistoryAnchorsOnLatestToggle`：1049h + 1049l 交错时 anchor 取最后一个（1049l），丢掉早期的 1049h，修复前失败。
+  - `TestReadHistoryNoToggleUsesByteCap`：无 anchor 时按 1MB 字节上限返回。
+  - 5 个纯函数测试：anchor 多变体 / 无匹配 / 行数 under/at/zero limit。
+  - 原有 `TestReadHistoryDefaultTerminalLimit` / `Extra` / `CapsByBytes` 三个回归仍通过。
+- **为什么原测试没覆盖**：原异常清单只有"很多行"和"很多字节"两种样本，没有"ANSI heavy、无 newline、有 alt-screen 切换"这种 TUI 场景。对终端类产物测试要有"协议层"的样本（至少覆盖 alt-screen toggle、CSI 序列、可能切在转义序列中间）。
+- **紧急程度**：中（TUI 用户的核心体验被破坏）
+- **衍生改进建议**（下次处理）：
+  1. Anchor 之后的字节如果还是切在半截 CSI 序列里（anchor 之前的部分截掉），仍可能让 xterm.js 吃到残骸。可在 anchor 前再吃 1 字节是否 `\x1b`，做"序列对齐"。
+  2. 10MB 硬上限对重度 TUI 用户可能还是紧。长期应该做"按屏快照"（xterm-headless 解析到 screen matrix，存快照 + 增量）而不是全字节回放。
+  3. `ReadHistory` 目前只有 `ws/handler.go` 一个调用点——如果后续有"导出历史"之类的功能要读原始字节而不要 anchor/reset，要分两套 API。
 
 ## 2026-04-20
 
