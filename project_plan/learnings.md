@@ -2,6 +2,23 @@
 
 ## 2026-04-23
 
+### Bug 修复：重连后出现 `^[[O%` 焦点事件回显
+
+- **发现于**：用户报告（"重连之后输出乱码：── 终端已重连 … ──^[[O% ➜ penguin"）
+- **现象**：刷新页面后，marker 行尾紧跟 `^[[O`（ESC+`[O` 的 echoctl 可见渲染）和 zsh 的 `PROMPT_EOL_MARK` `%`，然后才是新 prompt。
+- **根因**：日志里有一条上一次会话发过的 `\x1b[?1004h`（启用焦点事件追踪，常由 zsh/p10k 初始化时发）。重连时回放把这条字节送给新 mount 的 xterm.js → xterm.js 激活焦点追踪 → 浏览器标签刷新期间的焦点状态变化让它发 `\x1b[O` 给 WS → Server WriteToPTY → 新 shell 启动瞬间 tty 还在 cooked+ECHOCTL 状态，line discipline 把 `\x1b[O` 回显成可见 `^[[O` 打到屏幕上。`%` 是 zsh 发现前一行没 `\n` 结尾时的提示符前标记。鼠标追踪（`?1000`-`?1006`, `?1015`, `?1016`）同机制，任何鼠标移动都会触发 xterm.js 反向发输入。
+- **修复**：扩展上一轮的 `terminalQueryRegex`，把会让 xterm.js 反向发输入的**模式 SET/RESET** 也加进去：`\x1b\[\?(?:100[0-6]|101[56])[hl]`。alt-screen（`?47` / `?1047` / `?1049`）号段在外，anchor 逻辑仍可依赖；bracketed paste (`?2004`)、光标可见性 (`?25`)、行包裹 (`?7`) 等不产生反向输入，也不被触碰。
+- **回归测试**：`backend/internal/container/query_strip_test.go` 新增
+  - `TestStripTerminalQueriesRemovesFocusAndMouseModes`：9 组 mode + 2 状态共 18 条序列全部剥掉。
+  - `TestStripTerminalQueriesPreservesAltScreenAndBenignModes`：6 类 benign 序列全部保留（包括 anchor 三种变体）。
+  - `TestReadHistoryStripsFocusModeFromReplay`：端到端验证日志 → ReadHistory 不含 `\x1b[?1004h` / `\x1b[?1002h`。
+- **为什么原测试没覆盖**：上一轮的 query strip 测试只覆盖了"终端应答查询"这一类副作用路径，没覆盖"终端因为被启用了某个 mode 而反向发事件"这一类。二者的共同本质是"回放激活了让 xterm.js 变成输入源的状态"，但具体表现截然不同（查询 = 立即回应，mode = 后续事件触发）。协议层测试应该系统化覆盖"xterm.js 何时会成为输入源"——至少包括：应答查询、焦点事件、鼠标事件、bracketed paste 包裹、Kitty keyboard protocol 响应。
+- **紧急程度**：中（每次重连都污染屏幕，但不阻断操作；跟随 bb974ae / b50b2da 一起发布比较合适）
+- **衍生改进建议**（下次处理）：
+  1. 日志里出现的 `\x1b[I`、`\x1b[O`、`\x1b[M...`（X10 鼠标上报）、`\x1b[<...M`（SGR 鼠标）等 **echo 回来的** xterm-to-pty 序列，本来就不该被当成"终端输出"再回放。下一步可以在 pumpOutput 写入 log 的阶段就过滤掉，或者在 readHistoryTailFromFile 里把这几种反向序列也剥掉。
+  2. 本次还是在替"xterm.js 状态管理"打补丁。根本解法（上条 learning 里已经提过）是 server-side headless 解析：维护屏幕矩阵，回放发快照而非字节流。
+  3. zsh 的 `PROMPT_EOL_MARK %` 其实还算友好 —— 没它的话 `^[[O` 就会跟 marker 贴在一起更难察觉。
+
 ### Bug 修复：重连后 prompt 出现 `2026;2$y1;2c...` 重复串
 
 - **发现于**：用户报告（"刷新页面有的终端出现乱码 `➜ penguin 2026;2$y1;2c2026;2$y1;2c…`"）

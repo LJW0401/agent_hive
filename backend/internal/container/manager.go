@@ -736,15 +736,21 @@ func (m *Manager) ReadHistory(containerID, terminalID string) ([]byte, error) {
 	return readHistoryFile(m.terminalLogPath(containerID, terminalID), lineLimit)
 }
 
-// terminalQueryRegex matches CSI sequences that ask the terminal to REPLY
-// (Device Attributes, Device Status Report, DECRQM, XT version). These are
-// normally answered by xterm.js at runtime — but on replay xterm.js sees them
-// a second time and re-replies, writing to PTY input. At an idle zsh prompt
-// the reply's `ESC-[` prefix gets consumed as a keymap lead-in and the
-// remaining payload (e.g. `2026;2$y` / `1;2c`) is inserted as literal text
-// at the cursor. Strip queries from replay — response-shaped sequences
-// (with `?` inside or `$y`/`R`/`n` non-query suffixes) don't match and are
-// preserved.
+// terminalQueryRegex matches CSI sequences that would make xterm.js emit
+// input back to the PTY if seen during replay. Two families:
+//
+//   1. Queries that xterm.js answers (DA/DSR/DECRQM/XT version) — on replay
+//      the answers travel to an idle zsh prompt, whose ZLE eats the `ESC-[`
+//      prefix and inserts the payload (`2026;2$y`, `1;2c`) as literal text.
+//   2. Focus-tracking (`?1004`) and mouse-tracking (`?1000`-`?1006`,
+//      `?1015`/`?1016`) mode SET / RESET. On replay these activate the
+//      corresponding mode inside xterm.js; focus changes or mouse moves
+//      then trigger reverse input (e.g. `\x1b[O` focus-out), which the
+//      still-cooked-mode new shell echoes as visible `^[[O`.
+//
+// Responses (with `?` after `[` or `$y`/`R`/`n` suffixes) and alt-screen
+// toggles (`?1049`/`?1047`/`?47` — out of the stripped mode range) are
+// preserved by the regex's shape.
 var terminalQueryRegex = regexp.MustCompile(
 	`\x1b\[(?:` +
 		`[0-9]*c` + // DA1: \x1b[c, \x1b[0c
@@ -752,6 +758,7 @@ var terminalQueryRegex = regexp.MustCompile(
 		`|[56]n` + // DSR 5 (status), DSR 6 (cursor position)
 		`|\??[0-9]+\$p` + // DECRQM (public and private)
 		`|>[0-9]*q` + // XT version
+		`|\?(?:100[0-6]|101[56])[hl]` + // focus + mouse tracking SET/RESET
 		`)`,
 )
 
