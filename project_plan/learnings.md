@@ -2,6 +2,25 @@
 
 ## 2026-04-23
 
+### Bug 修复：重连后 prompt 出现 `2026;2$y1;2c...` 重复串
+
+- **发现于**：用户报告（"刷新页面有的终端出现乱码 `➜ penguin 2026;2$y1;2c2026;2$y1;2c…`"）
+- **现象**：非 TUI 终端（纯 zsh + oh-my-zsh / p10k）重连后，光标位置被塞进一大段 `2026;2$y1;2c` 重复串，像是有人在连续粘贴。
+- **根因**：oh-my-zsh / p10k 在每次 prompt 绘制时发终端能力探测（DA1 `\x1b[c`、DECRQM mode 2026 `\x1b[?2026$p`）。这些查询字节在 shell stdout 上，**被我们的日志记录下来**。TUI anchor 修复把 tail 从 256KB 放大到 1MB 后，日志里攒下了几十次 prompt 查询都进了回放。重连时 xterm.js 把回放字节当**新鲜查询**处理，每次都照章回答；响应 `\x1b[?2026;2$y` / `\x1b[?1;2c` 经 WS 写回 PTY，idle 的 zsh ZLE 把 `ESC-[` 吃掉当 keymap 引导，剩下 `2026;2$y` / `1;2c` 作为字面文字插进命令行缓冲区。
+- **修复**：新增 `stripTerminalQueries`，用正则在回放前剥掉只承担"向终端提问"语义的 CSI 序列：DA1/DA2/DA3 (`\x1b[{>=}*c`)、DSR 5/6 (`\x1b[{5,6}n`)、DECRQM 公/私 (`\x1b[{?}?N$p`)、XT version (`\x1b[>*q`)。响应格式因为有 `?` 前缀或 `$y`/`R`/`0n` 等区分位，不会被正则误伤。在 `readHistoryTailFromFile` 最终返回前统一调用，`ReadHistory` 和 `SubscribeWithSnapshot` 两条回放路径同时受益。
+- **回归测试**：`backend/internal/container/query_strip_test.go`
+  - `TestStripTerminalQueriesRemovesDA1AndDECRQM`：用户报告的两种查询剥离，同时保留周围文本和普通 SGR。
+  - `TestStripTerminalQueriesPreservesResponses`：7 种响应（DA1/DA2/DECRQM/DSR）全部不被触动。
+  - `TestStripTerminalQueriesCoversCommonFamilies`：11 种查询变体全部剥干净。
+  - `TestStripTerminalQueriesEmpty` / `PlainTextUntouched`：空输入 + "c"、"$p"、">q"、".c 文件名" 等类似字节在纯文本里保持原样。
+  - `TestReadHistoryStripsTerminalQueriesFromReplay`：5 次 prompt 的模拟日志过 `ReadHistory` 后探测序列全被剥。
+- **为什么原测试没覆盖**：先前的 TUI anchor 测试样本只考虑了 1049h + CSI 重绘，没覆盖"shell 在 idle prompt 发探测序列"这种场景；回放对 xterm.js **再触发响应**这条副作用路径（PTY ← WS ← xterm.js）需要理解客户端行为才能想到，光看服务端代码看不出来。协议层测试样本不光要覆盖 TUI/non-TUI，还要区分"纯显示字节"和"期望终端回应的查询字节"。
+- **紧急程度**：高（每次重连都污染用户光标位置，交互直接被阻断）
+- **衍生改进建议**（下次处理）：
+  1. 还有 OSC 色值查询（`\x1b]10;?\x07` 等）、Kitty keyboard protocol 查询（`\x1b[?u`）等更新一些的终端协议也会在回放时重触发响应；未来出现再扩。
+  2. 长期真正的解法还是 server-side headless 解析（维护 screen matrix，回放送屏幕快照 + 增量），能一次性绕开所有"回放激活副作用"的家族问题。已在上条 learning 里标记过。
+  3. xterm.js 侧如果能加"回放模式"API（不答查询），客户端配合更干净；目前 xterm.js 没提供，server-side 过滤是唯一选项。
+
 ### Bug 修复：Claude Code 大 history 下实时输出被截断
 
 - **发现于**：用户观察（"在 claude code 运行过程中会截断在运行的命令处"），在上一个 TUI anchor 修复（5f98df6）合入后暴露。

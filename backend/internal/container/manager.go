@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -735,6 +736,34 @@ func (m *Manager) ReadHistory(containerID, terminalID string) ([]byte, error) {
 	return readHistoryFile(m.terminalLogPath(containerID, terminalID), lineLimit)
 }
 
+// terminalQueryRegex matches CSI sequences that ask the terminal to REPLY
+// (Device Attributes, Device Status Report, DECRQM, XT version). These are
+// normally answered by xterm.js at runtime — but on replay xterm.js sees them
+// a second time and re-replies, writing to PTY input. At an idle zsh prompt
+// the reply's `ESC-[` prefix gets consumed as a keymap lead-in and the
+// remaining payload (e.g. `2026;2$y` / `1;2c`) is inserted as literal text
+// at the cursor. Strip queries from replay — response-shaped sequences
+// (with `?` inside or `$y`/`R`/`n` non-query suffixes) don't match and are
+// preserved.
+var terminalQueryRegex = regexp.MustCompile(
+	`\x1b\[(?:` +
+		`[0-9]*c` + // DA1: \x1b[c, \x1b[0c
+		`|[>=][0-9]*c` + // DA2 (>) / DA3 (=)
+		`|[56]n` + // DSR 5 (status), DSR 6 (cursor position)
+		`|\??[0-9]+\$p` + // DECRQM (public and private)
+		`|>[0-9]*q` + // XT version
+		`)`,
+)
+
+// stripTerminalQueries removes terminal query sequences from replay bytes.
+// Pure function — callers pass a copy if they need to preserve the original.
+func stripTerminalQueries(buf []byte) []byte {
+	if len(buf) == 0 {
+		return buf
+	}
+	return terminalQueryRegex.ReplaceAll(buf, nil)
+}
+
 // altScreenAnchorPatterns are the TUI "enter/exit alternate screen" sequences.
 // When present near the tail of the log, we start replay at the latest one so
 // xterm.js rebuilds the correct screen state; otherwise a naive byte tail
@@ -819,7 +848,7 @@ func readHistoryTailFromFile(f *os.File, upTo int64, lineLimit int) ([]byte, err
 		if int64(len(out)) > historyHardCeiling {
 			out = out[int64(len(out))-historyHardCeiling:]
 		}
-		return append([]byte(nil), out...), nil
+		return stripTerminalQueries(append([]byte(nil), out...)), nil
 	}
 
 	// Case 2 — no TUI toggle: byte cap + newline trim, same spirit as the
@@ -830,7 +859,7 @@ func readHistoryTailFromFile(f *os.File, upTo int64, lineLimit int) ([]byte, err
 	}
 	tail := window[tailStart-windowStart:]
 	trimmed := trimToLastLines(tail, lineLimit)
-	return append([]byte(nil), trimmed...), nil
+	return stripTerminalQueries(append([]byte(nil), trimmed...)), nil
 }
 
 // SubscribeWithSnapshot atomically snapshots the log's current byte size and
