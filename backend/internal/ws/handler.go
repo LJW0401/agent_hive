@@ -89,43 +89,100 @@ func HandleTerminal(mgr *container.Manager) http.HandlerFunc {
 			return conn.WriteMessage(msgType, data)
 		}
 
-		// Send terminal history. We prepend \x1bc (RIS, full terminal reset) so
-		// xterm.js starts from a clean state: pending SGR / alt-screen / charset
-		// flags from a prior partial connection can't bleed into the replay and
-		// produce a corrupted scrollback.
-		history, err := mgr.ReadHistory(containerID, terminalID)
-		if err == nil && len(history) > 0 {
-			bundle := make([]byte, 0, len(history)+2)
-			bundle = append(bundle, 0x1b, 'c')
-			bundle = append(bundle, history...)
-			writeMsg(websocket.BinaryMessage, bundle)
-		}
-
-		// If terminal disconnected, send status and close
+		// Disconnected terminals never have pumpOutput running, so there is no
+		// live stream — just send history (may be large) and close. The race
+		// that SubscribeWithSnapshot solves only exists for connected streams.
 		if !term.Connected {
+			history, _ := mgr.ReadHistory(containerID, terminalID)
+			if len(history) > 0 {
+				bundle := make([]byte, 0, len(history)+2)
+				bundle = append(bundle, 0x1b, 'c')
+				bundle = append(bundle, history...)
+				writeMsg(websocket.BinaryMessage, bundle)
+			}
 			writeMsg(websocket.TextMessage, []byte(`{"type":"status","connected":false}`))
 			conn.Close()
 			return
 		}
 
-		// Register listener on the terminal (not container)
-		listener := container.NewListener(
+		// Atomic snapshot + subscribe. This closes the race in which large
+		// replay bundles (up to 10MB after the TUI anchor fix) leave a
+		// hundreds-of-millisecond window between "history byte captured" and
+		// "listener attached" — pumpOutput writes during that window were
+		// silently dropped and the user saw replay truncate at the running
+		// command.
+		//
+		// Listener callbacks start buffering into `pending` until the history
+		// bundle has been fully sent, then we drain `pending` in order and
+		// flip `historySent` so subsequent callbacks write through directly.
+		// This keeps the wire format ordered: history first, then live bytes.
+		var pendingMu sync.Mutex
+		var pending [][]byte
+		historySent := false
+
+		history, listener, err := mgr.SubscribeWithSnapshot(
+			containerID,
+			terminalID,
 			func(data []byte) {
-				if err := writeMsg(websocket.BinaryMessage, data); err != nil {
-					log.Printf("ws write error: %v", err)
+				pendingMu.Lock()
+				if historySent {
+					pendingMu.Unlock()
+					if werr := writeMsg(websocket.BinaryMessage, data); werr != nil {
+						log.Printf("ws write error: %v", werr)
+					}
+					return
 				}
+				// Copy — the caller owns `data` only for this call.
+				pending = append(pending, append([]byte(nil), data...))
+				pendingMu.Unlock()
 			},
 			func() {
 				writeMsg(websocket.TextMessage, []byte(`{"type":"status","connected":false}`))
 				conn.Close()
 			},
 		)
-		term.AddListener(listener)
+		if err != nil {
+			log.Printf("subscribe error: %v", err)
+			conn.Close()
+			return
+		}
 
 		defer func() {
 			term.RemoveListener(listener)
 			conn.Close()
 		}()
+
+		// Send terminal history. We prepend \x1bc (RIS, full terminal reset) so
+		// xterm.js starts from a clean state: pending SGR / alt-screen / charset
+		// flags from a prior partial connection can't bleed into the replay and
+		// produce a corrupted scrollback.
+		if len(history) > 0 {
+			bundle := make([]byte, 0, len(history)+2)
+			bundle = append(bundle, 0x1b, 'c')
+			bundle = append(bundle, history...)
+			writeMsg(websocket.BinaryMessage, bundle)
+		}
+
+		// Drain any live bytes that arrived while we were sending history.
+		// Loop until the pending queue is empty, then flip historySent; after
+		// the flip, listener writes bypass the queue.
+		for {
+			pendingMu.Lock()
+			if len(pending) == 0 {
+				historySent = true
+				pendingMu.Unlock()
+				break
+			}
+			batch := pending
+			pending = nil
+			pendingMu.Unlock()
+			for _, b := range batch {
+				if werr := writeMsg(websocket.BinaryMessage, b); werr != nil {
+					log.Printf("ws write error: %v", werr)
+					break
+				}
+			}
+		}
 
 		// WebSocket -> PTY
 		for {

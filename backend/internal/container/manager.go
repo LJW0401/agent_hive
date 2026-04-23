@@ -787,8 +787,17 @@ func readHistoryFile(path string, lineLimit int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	size := info.Size()
-	if size == 0 {
+	return readHistoryTailFromFile(f, info.Size(), lineLimit)
+}
+
+// readHistoryTailFromFile returns the TUI-anchor-aware tail of the file up to
+// upTo bytes. Splitting this from readHistoryFile lets SubscribeWithSnapshot
+// read exactly up to a snapshot offset, even if pumpOutput has already
+// appended more bytes by the time we open the file — those newer bytes belong
+// to the listener stream, not the history.
+func readHistoryTailFromFile(f *os.File, upTo int64, lineLimit int) ([]byte, error) {
+	size := upTo
+	if size <= 0 {
 		return nil, nil
 	}
 
@@ -822,4 +831,81 @@ func readHistoryFile(path string, lineLimit int) ([]byte, error) {
 	tail := window[tailStart-windowStart:]
 	trimmed := trimToLastLines(tail, lineLimit)
 	return append([]byte(nil), trimmed...), nil
+}
+
+// SubscribeWithSnapshot atomically snapshots the log's current byte size and
+// registers a listener, so that no byte slips through the gap between "took
+// the history snapshot" and "became reachable by the live stream":
+//
+//   - Bytes written before the call are captured in the returned history.
+//   - Bytes written after the call are delivered via the listener.
+//   - No byte is in both (no duplicates, no missing).
+//
+// The atomicity hinges on pumpOutput's invariant that the log-file write AND
+// the listener-set iteration happen under the same terminal lock (see
+// pumpOutput in this file). SubscribeWithSnapshot takes that same lock while
+// it stats the log and installs the listener, so pumpOutput either runs
+// entirely before (bytes in the stat'd size → in history) or entirely after
+// (listener visible → broadcast delivered).
+func (m *Manager) SubscribeWithSnapshot(
+	containerID, terminalID string,
+	onOutput func([]byte),
+	onDisconnect func(),
+) ([]byte, *Listener, error) {
+	m.mu.RLock()
+	c, ok := m.containers[containerID]
+	m.mu.RUnlock()
+	if !ok {
+		return nil, nil, ErrContainerNotFound
+	}
+
+	c.mu.Lock()
+	t, ok := c.terminals[terminalID]
+	c.mu.Unlock()
+	if !ok {
+		return nil, nil, ErrTerminalNotFound
+	}
+
+	lineLimit := extraHistoryLineLimit
+	if t.IsDefault {
+		lineLimit = defaultHistoryLineLimit
+	}
+	path := m.terminalLogPath(containerID, terminalID)
+
+	listener := NewListener(onOutput, onDisconnect)
+
+	// Critical section — same lock pumpOutput uses. Stat the file inside the
+	// lock so pumpOutput's next write either has already committed (reflected
+	// in snapSize) or must wait for us to release (listener visible).
+	var snapSize int64
+	t.mu.Lock()
+	if info, err := os.Stat(path); err == nil {
+		snapSize = info.Size()
+	}
+	if t.listeners == nil {
+		t.listeners = make(map[*Listener]bool)
+	}
+	t.listeners[listener] = true
+	t.mu.Unlock()
+
+	// Read file bytes up to snapSize only; anything past that will arrive
+	// through the listener.
+	if snapSize == 0 {
+		return nil, listener, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, listener, nil
+		}
+		t.RemoveListener(listener)
+		return nil, nil, err
+	}
+	defer f.Close()
+	history, err := readHistoryTailFromFile(f, snapSize, lineLimit)
+	if err != nil {
+		t.RemoveListener(listener)
+		return nil, nil, err
+	}
+	return history, listener, nil
 }

@@ -2,6 +2,26 @@
 
 ## 2026-04-23
 
+### Bug 修复：Claude Code 大 history 下实时输出被截断
+
+- **发现于**：用户观察（"在 claude code 运行过程中会截断在运行的命令处"），在上一个 TUI anchor 修复（5f98df6）合入后暴露。
+- **现象**：Claude Code 正在跑（alt-screen 内持续重绘），用户重连 WS，回放结束后屏幕停在"某条命令正在运行"的一帧，之后的实时字节再不刷新；再过几秒才恢复正常。
+- **根因**：`ws/handler.go` 按「`ReadHistory` → 发送 history → `AddListener`」的顺序推进。`ReadHistory` 之后到 `AddListener` 之间的字节：(1) 已经被 pumpOutput 在 `t.mu` 保护下写进日志文件（但我们已完成文件快照）；(2) 广播时 listener 还没注册，根本没被塞给新连接。旧代码 256KB history 时这个窗口是毫秒级、几乎不可感知；TUI anchor 修复把 history 放大到可达 10MB 后，窗口拉到数百毫秒，正好覆盖 Claude Code 跑一个命令的活跃输出期，于是"截断在运行的命令处"。
+- **修复**：
+  - 新增 `Manager.SubscribeWithSnapshot`：在 `t.mu` 保护下**原子地**做两件事——`os.Stat` 日志文件拿到 `snapSize`、注册 listener。因为 pumpOutput 也在 `t.mu` 下写文件 + 遍历 listener，所以任何一次 pumpOutput 写要么"整体发生在我们 Lock 之前"（bytes 已在 snapSize 内 → 被 history 读到）、要么"整体发生在我们 Unlock 之后"（listener 已可见 → 走广播），不可能夹在中间丢。
+  - 把 `readHistoryFile` 里 "stat 再读 tail" 拆成 `readHistoryTailFromFile(f, upTo, lineLimit)`，让 `SubscribeWithSnapshot` 用 `snapSize` 严格封顶。新增字节进不来 history，也就不会和 listener 重复。
+  - `ws/handler.go` 改走 `SubscribeWithSnapshot`，并加一条 `pending` 队列：从订阅成功到 history 发完这段时间的 listener 回调先进队列，发完 history 后按序 drain，再把 `historySent` 翻成 true 让后续回调直通。这保证线格式顺序：history → drain buffer → 直通。
+- **回归测试**：`backend/internal/container/subscribe_test.go`
+  - `TestSubscribeWithSnapshotClosesTheRace`：种 HISTORY_BYTES，订阅后用 `simulatePumpOutput`（严格按 pumpOutput 的 lock 顺序）追加 LIVE_BYTES_A/B；断言 history 包含前者、listener 收到后者、不出现重复。
+  - `TestSubscribeWithSnapshotUnknownContainer/Terminal`：未知 id 返回明确 error，不泄漏 listener。
+  - `TestSubscribeWithSnapshotFreshLogNoContent`：全新终端（日志文件还不存在）订阅能正常返回空 history + 可用 listener，之后的写入能到达 listener。
+- **为什么原测试没覆盖**：`ws/handler.go` 从来没有自动化测试（需要 WebSocket + 真 PTY 才能端到端）；Manager 层的并发契约（"pumpOutput 与订阅方必须在同一把锁下协调 snapshot 和 listener 注册"）也没有显式断言。Manager 与 ws/handler 之间一直是"隐式契约"，一方变更没法被另一方的测试拦截。这类横跨模块的并发不变量，必须有一层专门的 contract test（像本次的 `simulatePumpOutput` 就是这种角色）。
+- **紧急程度**：高（上个 TUI fix 把偶发小 race 变成每次 Claude Code 重连必现的数据丢失）
+- **衍生改进建议**（下次处理）：
+  1. `Listener.Send` 仍然是 lossy 的（channel cap 64，满了默认丢）；若再叠上 WS 客户端慢，pending drain 仍可能被截断。应把 `Listener` 改成带容量保护的阻塞/背压模型，或为 WS listener 单独加一条大缓冲。
+  2. `Manager.ReadHistory` 现在只剩"非连接态终端送 history"一个调用点，将来可以并进 `SubscribeWithSnapshot`（对 disconnected 返回 listener=nil）减少 API 表面。
+  3. `ws/handler.go` 目前没有单测，这次的隐性契约破坏本应被端到端测试发现——未来应引入一个基于 `httptest` + WebSocket 的集成测试框架，至少覆盖 reconnect / disconnect / 大 history 场景。
+
 ### Bug 修复：reopen 终端丢失历史
 
 - **发现于**：用户手动测试（"后台重启后重新打开终端之前的信息都没了变成了新的终端"）
