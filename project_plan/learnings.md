@@ -2,6 +2,24 @@
 
 ## 2026-04-23
 
+### Bug 修复：reopen 终端丢失历史
+
+- **发现于**：用户手动测试（"后台重启后重新打开终端之前的信息都没了变成了新的终端"）
+- **现象**：服务端重启后，容器自动进入 disconnected 态；用户点"重连"，新打开的终端没有任何历史滚动区，像是全新终端。
+- **根因**：`reopenTerminal` 用 `O_CREATE|O_WRONLY|O_TRUNC` 打开磁盘上的终端日志文件。虽然 Restore 阶段文件仍然完好，但 reopen 这一步就把历史内容截断；之后前端 WS 连上拉 `ReadHistory` 只能读到空文件。与 `Create` / `CreateTerminal` 用的 `O_APPEND` 形成了不一致。
+- **修复**：抽出 `openTerminalLogFile(path)` 辅助函数统一使用 `O_CREATE|O_WRONLY|O_APPEND`，三个入口（Create / CreateTerminal / reopenTerminal）全部走这一条路径；同时在 reopen 时向日志里写一条 ANSI dim 的「终端已重连 yyyy-mm-dd HH:MM:SS」分隔行（`formatReconnectMarker`），让用户在滚动历史时能看到上次会话和本次会话的接缝。
+- **回归测试**：`backend/internal/container/reopen_history_test.go` 三个用例：
+  1. `TestOpenTerminalLogFilePreservesPriorContent`：直接验证 helper 不截断预存内容。
+  2. `TestOpenTerminalLogFileCreatesWhenMissing`：文件不存在时能正常创建（边界）。
+  3. `TestReadHistoryAfterReopenIncludesPriorSession`：从 `ReadHistory` 视角验证 reopen 后旧 + 新输出都在。
+  修复前三个里的 1 和 3 均失败（已实测），修复后全部通过。
+- **为什么原测试没覆盖**：`reopenTerminal` 会 fork 真 PTY，测试基础设施里没有这个路径的用例；历史存续又是"跨进程生命周期"的行为（服务重启才复现），纯单测无法自然触发。异常场景清单只盖了"reopen 成功建立新会话"，漏了"reopen 对副作用文件的影响"。以后写会改动磁盘产物的函数，必须对产物做快照断言。
+- **紧急程度**：中（影响用户核心工作流——服务重启后所有终端看起来像崩了）
+- **衍生改进建议**（下次处理）：
+  1. 历史日志随长时间重连会无限追加，当前 `ReadHistory` 已有 256KB 尾读上限足以遮蔽，但磁盘占用会增长，将来应加日志轮转。
+  2. 如果旧会话死在 alternate screen buffer（vim、less 等）里，replay 的 ANSI 会让屏幕残留异常。未来可在 `ReadHistory` 前端加一层"裁剪到最后一个清屏点"的处理。
+  3. `container.Manager` 中还有多处直接 `os.OpenFile`/`os.Readlink`，将来若再出现因 flag 不一致导致的 bug，可以考虑引入一个 `fs` 子包统一封装。
+
 ### 快速功能：restart-terminal-inherit-cwd
 
 - **类型**：架构洞察（观测模式 vs. 捕获时机）

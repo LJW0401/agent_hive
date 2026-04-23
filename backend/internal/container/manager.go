@@ -205,6 +205,31 @@ func (m *Manager) terminalLogPath(containerID, terminalID string) string {
 	return filepath.Join(m.dataDir, "terminals", containerID, terminalID+".log")
 }
 
+// openTerminalLogFile opens (or creates) a terminal's output log in append
+// mode. Preserving prior content is load-bearing: after a server restart, the
+// user clicks "reconnect", which drives reopenTerminal — and the front-end
+// then asks for ReadHistory to replay scrollback. If this file is truncated on
+// reopen, the previous session's output disappears and the terminal looks
+// blank.
+func openTerminalLogFile(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+}
+
+// reconnectNow is the clock used when stamping the reopen marker; exposed as a
+// variable so tests can freeze time.
+var reconnectNow = time.Now
+
+// formatReconnectMarker builds the visible separator inserted into the terminal
+// log on reopen, so the user can tell where the prior session ended and the
+// new one begins when scrolling back. ANSI dim + CRLF so it flows inline with
+// shell output on any terminal.
+func formatReconnectMarker(t time.Time) []byte {
+	return []byte(fmt.Sprintf(
+		"\r\n\x1b[2m── 终端已重连 %s ──\x1b[0m\r\n",
+		t.Format("2006-01-02 15:04:05"),
+	))
+}
+
 func (m *Manager) nextTerminalID(containerID string) string {
 	return fmt.Sprintf("t-%s-%d", containerID, m.nextTermID.Add(1))
 }
@@ -221,7 +246,7 @@ func (m *Manager) Create(name string) (*Container, error) {
 
 	logDir := filepath.Join(m.dataDir, "terminals", id)
 	os.MkdirAll(logDir, 0755)
-	logFile, err := os.OpenFile(m.terminalLogPath(id, tid), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	logFile, err := openTerminalLogFile(m.terminalLogPath(id, tid))
 	if err != nil {
 		session.Close()
 		return nil, err
@@ -288,7 +313,7 @@ func (m *Manager) CreateTerminal(containerID string) (*Terminal, error) {
 
 	logDir := filepath.Join(m.dataDir, "terminals", containerID)
 	os.MkdirAll(logDir, 0755)
-	logFile, err := os.OpenFile(m.terminalLogPath(containerID, tid), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	logFile, err := openTerminalLogFile(m.terminalLogPath(containerID, tid))
 	if err != nil {
 		session.Close()
 		return nil, err
@@ -479,11 +504,14 @@ func (m *Manager) reopenTerminal(c *Container, t *Terminal) error {
 
 	logDir := filepath.Join(m.dataDir, "terminals", c.ID)
 	os.MkdirAll(logDir, 0755)
-	logFile, err := os.OpenFile(m.terminalLogPath(c.ID, t.ID), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	logFile, err := openTerminalLogFile(m.terminalLogPath(c.ID, t.ID))
 	if err != nil {
 		session.Close()
 		return err
 	}
+	// Insert a visible marker at the seam between the old and new sessions so
+	// history replay makes it clear where the reconnect happened.
+	_, _ = logFile.Write(formatReconnectMarker(reconnectNow()))
 
 	t.mu.Lock()
 	t.session = session
