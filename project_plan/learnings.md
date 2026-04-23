@@ -1,5 +1,29 @@
 # Learnings
 
+## 2026-04-23
+
+### 快速功能：restart-terminal-inherit-cwd
+
+- **类型**：架构洞察（观测模式 vs. 捕获时机）
+- **描述**：shell 进程死亡后想"事后回读"它的 cwd 是不现实的——`/proc/<pid>/cwd` 在进程被 reap 后立刻消失，`pumpOutput` 读到 EOF 时 /proc 入口已不可读。本次采用"活期轮询 + 写穿到 DB"的观测模式（每 2s 采样一次 `/proc/<pid>/cwd`，只在值变化时写 DB），空读不覆盖缓存，避免 /proc 抖动清空状态。另一条路是让 shell 主动上报（OSC 7），但需要用户改 shell 配置，不够透明。
+- **建议处理方式**：保持。2s 节拍在"短终端丢失窗口"与"DB 写频率"间折中；若观察到写 DB 过于频繁再叠"仅 Wait 退出时落盘"。
+- **紧急程度**：低
+
+- **类型**：测试缺口
+- **描述**：`pollCWD` 的 ticker + goroutine 生命周期未覆盖真实 PTY 的集成测试（会 fork shell、依赖 /bin/sh）；目前只覆盖了 `observeCWD`/`reopenOpts`/`sessionPID` 三个纯函数 + `UpdateTerminalCWD` 的 DB 往返和老 schema 迁移。
+- **建议处理方式**：等到真环境出现"reopen 没继承 cwd"再补集成用例；纯函数层已穷尽分支（首次/重复/空读/空读后恢复）。
+- **紧急程度**：低
+
+- **类型**：技术债（架构一致性）
+- **描述**：`container.Manager.db` 是具体 `*store.Store` 类型，无法在单测中注入假 store 验证"变化时才写 DB"。当前借 `observeCWD` 返回值 + `if changed && db != nil` 守卫侧面保证，但无法强断言。
+- **建议处理方式**：若后续 Manager 的 DB 访问点再增加，抽 `terminalStore` interface 允许测试替换。
+- **紧急程度**：低
+
+- **类型**：架构洞察（schema 演进）
+- **描述**：SQLite 没有 `ALTER TABLE ADD COLUMN IF NOT EXISTS`，本次用 `PRAGMA table_info` 探测列存在再决定是否 ALTER，是 SQLite 下幂等加列的标准做法。测试覆盖了"幂等"与"老库升级"两类。
+- **建议处理方式**：之后再加列复用 `addTerminalLastCWDColumn` 模式。
+- **紧急程度**：低
+
 ## 2026-04-20
 
 ### 快速功能：todo-insert-at-top

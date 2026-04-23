@@ -10,6 +10,7 @@ type TerminalMeta struct {
 	IsDefault   bool      `json:"isDefault"`
 	SortOrder   int       `json:"sortOrder"`
 	CreatedAt   time.Time `json:"createdAt"`
+	LastCWD     string    `json:"lastCwd,omitempty"`
 }
 
 // CreateTerminal creates a new terminal for a container.
@@ -43,7 +44,7 @@ func (s *Store) CreateTerminal(containerID, id, name string, isDefault bool) (*T
 // ListTerminals returns all terminals for a container, ordered by sort_order.
 func (s *Store) ListTerminals(containerID string) ([]TerminalMeta, error) {
 	rows, err := s.db.Query(
-		`SELECT id, container_id, name, is_default, sort_order, created_at
+		`SELECT id, container_id, name, is_default, sort_order, created_at, last_cwd
 		 FROM terminals WHERE container_id = ? ORDER BY sort_order ASC`,
 		containerID,
 	)
@@ -56,7 +57,7 @@ func (s *Store) ListTerminals(containerID string) ([]TerminalMeta, error) {
 	for rows.Next() {
 		var t TerminalMeta
 		var isDefault int
-		if err := rows.Scan(&t.ID, &t.ContainerID, &t.Name, &isDefault, &t.SortOrder, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.ContainerID, &t.Name, &isDefault, &t.SortOrder, &t.CreatedAt, &t.LastCWD); err != nil {
 			return nil, err
 		}
 		t.IsDefault = isDefault != 0
@@ -92,9 +93,9 @@ func (s *Store) GetTerminal(id string) (*TerminalMeta, error) {
 	var t TerminalMeta
 	var isDefault int
 	err := s.db.QueryRow(
-		`SELECT id, container_id, name, is_default, sort_order, created_at
+		`SELECT id, container_id, name, is_default, sort_order, created_at, last_cwd
 		 FROM terminals WHERE id = ?`, id,
-	).Scan(&t.ID, &t.ContainerID, &t.Name, &isDefault, &t.SortOrder, &t.CreatedAt)
+	).Scan(&t.ID, &t.ContainerID, &t.Name, &isDefault, &t.SortOrder, &t.CreatedAt, &t.LastCWD)
 	if err != nil {
 		return nil, err
 	}
@@ -107,14 +108,22 @@ func (s *Store) GetDefaultTerminal(containerID string) (*TerminalMeta, error) {
 	var t TerminalMeta
 	var isDefault int
 	err := s.db.QueryRow(
-		`SELECT id, container_id, name, is_default, sort_order, created_at
+		`SELECT id, container_id, name, is_default, sort_order, created_at, last_cwd
 		 FROM terminals WHERE container_id = ? AND is_default = 1`, containerID,
-	).Scan(&t.ID, &t.ContainerID, &t.Name, &isDefault, &t.SortOrder, &t.CreatedAt)
+	).Scan(&t.ID, &t.ContainerID, &t.Name, &isDefault, &t.SortOrder, &t.CreatedAt, &t.LastCWD)
 	if err != nil {
 		return nil, err
 	}
 	t.IsDefault = isDefault != 0
 	return &t, nil
+}
+
+// UpdateTerminalCWD records the last known working directory of a terminal's shell,
+// so that reopening the terminal (after shell exit or server restart) can start in
+// the same directory.
+func (s *Store) UpdateTerminalCWD(id, cwd string) error {
+	_, err := s.db.Exec(`UPDATE terminals SET last_cwd = ? WHERE id = ?`, cwd, id)
+	return err
 }
 
 func boolToInt(b bool) int {

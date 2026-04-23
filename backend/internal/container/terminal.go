@@ -18,6 +18,24 @@ type Terminal struct {
 	session   *ptypkg.Session
 	logFile   *os.File
 	listeners map[*Listener]bool
+	// lastCWD is the last observed working directory of the shell process.
+	// Captured by the periodic CWD poller so that reopening the terminal can
+	// start in the same directory even after the shell has exited.
+	lastCWD string
+}
+
+// LastCWD returns the last observed working directory (may be empty).
+func (t *Terminal) LastCWD() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lastCWD
+}
+
+// SetLastCWD updates the cached last working directory.
+func (t *Terminal) SetLastCWD(cwd string) {
+	t.mu.Lock()
+	t.lastCWD = cwd
+	t.mu.Unlock()
 }
 
 // AddListener registers a listener for this terminal.

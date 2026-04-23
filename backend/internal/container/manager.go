@@ -26,6 +26,20 @@ var (
 const defaultHistoryLineLimit = 1000
 const extraHistoryLineLimit = 200
 const historyReplayByteLimit int64 = 256 * 1024
+const cwdPollInterval = 2 * time.Second
+
+// readProcCWD returns the working directory of the given PID, or "" on failure.
+// Exposed as a variable so tests can stub it.
+var readProcCWD = func(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	link, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid))
+	if err != nil {
+		return ""
+	}
+	return link
+}
 
 // Listener receives PTY output and disconnect events via buffered channel.
 type Listener struct {
@@ -125,9 +139,9 @@ func (m *Manager) GetCWD(containerID string) (string, error) {
 		return "", fmt.Errorf("terminal not connected")
 	}
 
-	cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid))
-	if err != nil {
-		return "", fmt.Errorf("failed to read cwd: %w", err)
+	cwd := readProcCWD(pid)
+	if cwd == "" {
+		return "", fmt.Errorf("failed to read cwd")
 	}
 	return cwd, nil
 }
@@ -241,6 +255,7 @@ func (m *Manager) Create(name string) (*Container, error) {
 	}
 
 	go m.pumpOutput(c, term)
+	go m.pollCWD(term)
 
 	return c, nil
 }
@@ -257,11 +272,7 @@ func (m *Manager) CreateTerminal(containerID string) (*Terminal, error) {
 	// Inherit CWD from default terminal
 	var cwd string
 	if dt := c.GetDefaultTerminal(); dt != nil {
-		if pid := dt.ProcessPID(); pid > 0 {
-			if link, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid)); err == nil {
-				cwd = link
-			}
-		}
+		cwd = readProcCWD(dt.ProcessPID())
 	}
 
 	tid := m.nextTerminalID(containerID)
@@ -304,6 +315,7 @@ func (m *Manager) CreateTerminal(containerID string) (*Terminal, error) {
 	}
 
 	go m.pumpOutput(c, term)
+	go m.pollCWD(term)
 
 	return term, nil
 }
@@ -357,6 +369,7 @@ func (m *Manager) Restore(id, name string, createdAt time.Time) {
 				IsDefault: meta.IsDefault,
 				Connected: false,
 				listeners: make(map[*Listener]bool),
+				lastCWD:   meta.LastCWD,
 			}
 			// Track max terminal ID number
 			var num int64
@@ -455,10 +468,12 @@ func (m *Manager) reopenTerminal(c *Container, t *Terminal) error {
 		t.mu.Unlock()
 		return ErrAlreadyConnected
 	}
+	inheritedCWD := t.lastCWD
+	t.mu.Unlock()
 
-	session, err := ptypkg.NewSession(m.ptyOpts)
+	opts := reopenOpts(m.ptyOpts, inheritedCWD)
+	session, err := ptypkg.NewSession(&opts)
 	if err != nil {
-		t.mu.Unlock()
 		return err
 	}
 
@@ -467,18 +482,78 @@ func (m *Manager) reopenTerminal(c *Container, t *Terminal) error {
 	logFile, err := os.OpenFile(m.terminalLogPath(c.ID, t.ID), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		session.Close()
-		t.mu.Unlock()
 		return err
 	}
 
+	t.mu.Lock()
 	t.session = session
 	t.logFile = logFile
 	t.Connected = true
 	t.mu.Unlock()
 
 	go m.pumpOutput(c, t)
+	go m.pollCWD(t)
 
 	return nil
+}
+
+// reopenOpts returns a copy of base with Dir overridden by inheritedCWD when
+// non-empty. When inheritedCWD is empty, base's Dir is left untouched so the
+// default (user home / config default) wins.
+func reopenOpts(base *ptypkg.SessionOptions, inheritedCWD string) ptypkg.SessionOptions {
+	var opts ptypkg.SessionOptions
+	if base != nil {
+		opts = *base
+	}
+	if inheritedCWD != "" {
+		opts.Dir = inheritedCWD
+	}
+	return opts
+}
+
+// observeCWD caches cwd on the terminal if it changed. Returns true when the
+// value actually changed (so the caller knows to persist to DB). Empty cwd is
+// treated as "read failed" and ignored — stale but non-empty is better than
+// blank state for a later reopen.
+func (t *Terminal) observeCWD(cwd string) bool {
+	if cwd == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.lastCWD == cwd {
+		return false
+	}
+	t.lastCWD = cwd
+	return true
+}
+
+// sessionPID returns the PID of the running shell, or 0 when disconnected.
+func (t *Terminal) sessionPID() int {
+	t.mu.Lock()
+	s := t.session
+	t.mu.Unlock()
+	if s == nil {
+		return 0
+	}
+	return s.PID()
+}
+
+// pollCWD periodically reads /proc/<pid>/cwd for the terminal's shell and caches
+// it on the Terminal (and persists to DB on change), so that future reopen calls
+// can restore the working directory even after the shell has exited.
+func (m *Manager) pollCWD(t *Terminal) {
+	ticker := time.NewTicker(cwdPollInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		pid := t.sessionPID()
+		if pid == 0 {
+			return
+		}
+		if t.observeCWD(readProcCWD(pid)) && m.db != nil {
+			_ = m.db.UpdateTerminalCWD(t.ID, t.LastCWD())
+		}
+	}
 }
 
 // pumpOutput reads from a terminal's PTY and broadcasts to all its listeners + log file.

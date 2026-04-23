@@ -87,6 +87,37 @@ func migrate(db *sql.DB) error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_terminals_container ON terminals(container_id);
 	`)
+	if err != nil {
+		return err
+	}
+
+	return addTerminalLastCWDColumn(db)
+}
+
+// addTerminalLastCWDColumn adds last_cwd column to terminals if it doesn't exist.
+// SQLite lacks "ADD COLUMN IF NOT EXISTS", so we probe PRAGMA first.
+func addTerminalLastCWDColumn(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(terminals)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == "last_cwd" {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE terminals ADD COLUMN last_cwd TEXT NOT NULL DEFAULT ''`)
 	return err
 }
 
