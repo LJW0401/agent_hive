@@ -166,3 +166,20 @@
 - **描述**：`detectEdgeZone` 已补纯函数测试，但 dwell 计时器 + pointermove + 边缘标记的集成行为未覆盖（需要 jsdom + fake timers 模拟 pointer 事件）。当前仅靠手动 UI 验证。
 - **建议处理方式**：等交互确定后再补集成测试，避免反复重写。
 - **紧急程度**：低
+
+## 2026-04-24
+
+### Bug 修复：OSC 颜色查询在回放中触发 prompt 乱码
+- **发现于**：用户报告重连后 prompt 出现 `10;rgb:e5e5/e7e7/ebeb11;rgb:1111/1111/1414` 重复串
+- **现象**：reopen 终端后，zsh prompt 首行被塞入 OSC 10/11 响应的载荷（`10;rgb:...;11;rgb:...`）
+- **根因**：v1.6.0 修掉 CSI 查询（DA/DSR/DECRQM）的回显链路后，**完全同机制**的 OSC 家族没一起覆盖。p10k / oh-my-zsh / vim / tmux 每次 prompt 绘制都会发 OSC 10 / 11 / 4 / 708 之类的颜色查询（`\x1b]10;?\x07`），日志照录；reopen 时回放到 xterm.js，xterm.js 当场答复；答复经 WS 到新 shell 的 tty，zsh ZLE 吞掉 `ESC ]`，BEL 截段成字面文本打到 prompt。`terminalQueryRegex` 只处理 `\x1b[...` CSI，不处理 `\x1b]...` OSC
+- **修复**：`backend/internal/container/manager.go` 的 `terminalQueryRegex` 加 OSC 分支 `\x1b\](?:4;[0-9]+|1[0-9]|708);\?(?:\x07|\x1b\\)`，覆盖号段 4（含子索引）/ 10-19 / 708，两种终结符（BEL / ST）。区分条件是 `;\?` 结尾——纯响应和设色（`rgb:...` / `#fff`）没有这个形状，窗口标题（OSC 0/1/2）不在号段内
+- **回归测试**：`backend/internal/container/query_strip_test.go`
+  - `TestStripTerminalQueriesRemovesOSCColorQueries` — 覆盖 OSC 10/11/12/17/19/4/708
+  - `TestStripTerminalQueriesRemovesOSCColorQueriesWithST` — ST 终结符
+  - `TestStripTerminalQueriesPreservesOSCSetsAndResponses` — 响应 / 主动设色 / 标题不被误伤
+  - `TestReadHistoryStripsOSCColorQueriesFromReplay` — 全链路
+- **为什么原测试没覆盖**：v1.6.0 修 DA1/DECRQM 时的视野只停留在"CSI 家族"，做测试时也是按 CSI 枚举。**失掉的思考路径**是"同一类架构缺陷（xterm.js 双向应答 → 新 shell 回显）是否还存在于其他协议层"。OSC 用不同的引导符和终结符但机制完全相同。下次遇到"X 字节被回放导致 xterm.js 发应答"类问题，至少要把 CSI / OSC / DCS / APC / PM / SOS 六个转义家族都过一遍，哪怕很多是空集
+- **紧急程度**：中
+- **衍生改进建议**（不在本次处理）：DCS（`\x1bP...\x1b\\`，含 XT 设置查询 `\x1bP$q...\x1b\\`）在 xterm.js 下是否也会触发应答？需要下次 prompt 探针家族审计时一并检查
+

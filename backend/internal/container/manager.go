@@ -736,21 +736,30 @@ func (m *Manager) ReadHistory(containerID, terminalID string) ([]byte, error) {
 	return readHistoryFile(m.terminalLogPath(containerID, terminalID), lineLimit)
 }
 
-// terminalQueryRegex matches CSI sequences that would make xterm.js emit
-// input back to the PTY if seen during replay. Two families:
+// terminalQueryRegex matches CSI / OSC sequences that would make xterm.js
+// emit input back to the PTY if seen during replay. Three families:
 //
-//   1. Queries that xterm.js answers (DA/DSR/DECRQM/XT version) — on replay
-//      the answers travel to an idle zsh prompt, whose ZLE eats the `ESC-[`
-//      prefix and inserts the payload (`2026;2$y`, `1;2c`) as literal text.
+//   1. CSI queries that xterm.js answers (DA/DSR/DECRQM/XT version) — on
+//      replay the answers travel to an idle zsh prompt, whose ZLE eats the
+//      `ESC-[` prefix and inserts the payload (`2026;2$y`, `1;2c`) as
+//      literal text.
 //   2. Focus-tracking (`?1004`) and mouse-tracking (`?1000`-`?1006`,
 //      `?1015`/`?1016`) mode SET / RESET. On replay these activate the
 //      corresponding mode inside xterm.js; focus changes or mouse moves
 //      then trigger reverse input (e.g. `\x1b[O` focus-out), which the
 //      still-cooked-mode new shell echoes as visible `^[[O`.
+//   3. OSC color queries (OSC 4 / 10-19 / 708 with `;?` payload) — p10k /
+//      oh-my-zsh / vim / tmux probe the terminal's fg/bg/palette on every
+//      prompt render. On replay xterm.js answers with `\x1b]N;rgb:...\x07`;
+//      zsh ZLE eats `ESC ]`, BEL terminates the line, and the rgb payload
+//      shows up as visible text (`10;rgb:e5e5/e7e7/ebeb11;rgb:...`).
 //
-// Responses (with `?` after `[` or `$y`/`R`/`n` suffixes) and alt-screen
-// toggles (`?1049`/`?1047`/`?47` — out of the stripped mode range) are
-// preserved by the regex's shape.
+// Preserved (the regex's shape rules them out):
+//   - CSI responses: `?` after `[`, or `$y` / `R` / `n` suffixes
+//   - Alt-screen toggles `?1049`/`?1047`/`?47` — out of stripped mode range
+//   - OSC sets / responses — payload isn't literal `?` (e.g. `rgb:...`,
+//     `#fff`, window title text)
+//   - OSC 0 / 1 / 2 (window / icon title) — not in the color number set
 var terminalQueryRegex = regexp.MustCompile(
 	`\x1b\[(?:` +
 		`[0-9]*c` + // DA1: \x1b[c, \x1b[0c
@@ -759,7 +768,8 @@ var terminalQueryRegex = regexp.MustCompile(
 		`|\??[0-9]+\$p` + // DECRQM (public and private)
 		`|>[0-9]*q` + // XT version
 		`|\?(?:100[0-6]|101[56])[hl]` + // focus + mouse tracking SET/RESET
-		`)`,
+		`)` +
+		`|\x1b\](?:4;[0-9]+|1[0-9]|708);\?(?:\x07|\x1b\\)`, // OSC color queries (BEL or ST terminator)
 )
 
 // stripTerminalQueries removes terminal query sequences from replay bytes.

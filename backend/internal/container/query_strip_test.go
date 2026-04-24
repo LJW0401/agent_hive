@@ -173,6 +173,105 @@ func TestReadHistoryStripsFocusModeFromReplay(t *testing.T) {
 	}
 }
 
+// Regression: post-v1.6.0 the user saw `10;rgb:e5e5/e7e7/ebeb11;rgb:1111/1111/1414`
+// repeated at their prompt. These are OSC 10 / OSC 11 color *responses* emitted
+// by xterm.js because the replay contained OSC 10/11 *queries* from the prior
+// shell prompt (p10k / oh-my-zsh / vim / tmux probe fg/bg color). The query
+// shape is `\x1b]<num>;?<terminator>`; the response shape is
+// `\x1b]<num>;rgb:.../.../...<terminator>`. Queries must be stripped from
+// replay so xterm.js has no queries to answer.
+func TestStripTerminalQueriesRemovesOSCColorQueries(t *testing.T) {
+	// BEL terminator (\x07) — xterm's de facto form.
+	cases := []string{
+		"\x1b]10;?\x07",   // fg color query
+		"\x1b]11;?\x07",   // bg color query
+		"\x1b]12;?\x07",   // cursor color query
+		"\x1b]17;?\x07",   // highlight bg query
+		"\x1b]19;?\x07",   // tek bg query
+		"\x1b]4;1;?\x07",  // palette index 1 query
+		"\x1b]4;15;?\x07", // palette index 15 query
+		"\x1b]708;?\x07",  // urxvt border color query
+	}
+	for _, q := range cases {
+		got := stripTerminalQueries([]byte(q))
+		if len(got) != 0 {
+			t.Errorf("OSC query %q not stripped → %q", q, got)
+		}
+	}
+}
+
+// Edge (ST terminator): same queries but terminated by ESC `\` (7-bit ST)
+// instead of BEL. Must also be stripped — some shells/terminals use ST.
+func TestStripTerminalQueriesRemovesOSCColorQueriesWithST(t *testing.T) {
+	cases := []string{
+		"\x1b]10;?\x1b\\",
+		"\x1b]11;?\x1b\\",
+		"\x1b]4;2;?\x1b\\",
+	}
+	for _, q := range cases {
+		got := stripTerminalQueries([]byte(q))
+		if len(got) != 0 {
+			t.Errorf("OSC query (ST-terminated) %q not stripped → %q", q, got)
+		}
+	}
+}
+
+// Edge (区分响应与 active set): OSC 10/11 responses (with concrete rgb: values)
+// and OSC 0/1/2 (window / icon title sets — not queries, different number
+// range) must survive. Otherwise a legitimate title-set during replay would
+// be erased, or a tput-style response capture would be mangled.
+func TestStripTerminalQueriesPreservesOSCSetsAndResponses(t *testing.T) {
+	cases := []string{
+		"\x1b]10;rgb:e5e5/e7e7/ebeb\x07", // OSC 10 response / active set
+		"\x1b]11;rgb:1111/1111/1414\x07", // OSC 11 response / active set
+		"\x1b]10;#ffffff\x07",            // OSC 10 active set (short form)
+		"\x1b]0;window-title\x07",        // OSC 0 window title set
+		"\x1b]2;terminal-title\x07",      // OSC 2 title set
+		"\x1b]1;icon-name\x07",           // OSC 1 icon set
+		"\x1b]4;3;rgb:ffff/0000/0000\x07", // OSC 4 palette set (not query)
+	}
+	for _, seq := range cases {
+		got := stripTerminalQueries([]byte(seq))
+		if !bytes.Equal(got, []byte(seq)) {
+			t.Errorf("OSC set/response %q mutated → %q", seq, got)
+		}
+	}
+}
+
+// Regression (full pipeline): ReadHistory must strip OSC color probes, the
+// exact scenario that produced `10;rgb:...11;rgb:...` on the user's prompt.
+func TestReadHistoryStripsOSCColorQueriesFromReplay(t *testing.T) {
+	mgr := newTestManager(t)
+	cid, tid := "c-1", "t-1"
+	mgr.containers[cid] = &Container{
+		ID:   cid,
+		Name: "Test",
+		terminals: map[string]*Terminal{
+			tid: {ID: tid, IsDefault: true, listeners: make(map[*Listener]bool)},
+		},
+	}
+	var b strings.Builder
+	for i := 0; i < 5; i++ {
+		b.WriteString("user@host ~ $ cmd\r\n")
+		b.WriteString("\x1b]10;?\x07\x1b]11;?\x07") // p10k-style fg+bg probe
+	}
+	writeTestHistory(t, mgr, cid, tid, b.String())
+
+	history, err := mgr.ReadHistory(cid, tid)
+	if err != nil {
+		t.Fatalf("ReadHistory: %v", err)
+	}
+	if bytes.Contains(history, []byte("\x1b]10;?")) {
+		t.Errorf("replay still contains OSC 10 query: %q", history)
+	}
+	if bytes.Contains(history, []byte("\x1b]11;?")) {
+		t.Errorf("replay still contains OSC 11 query: %q", history)
+	}
+	if !bytes.Contains(history, []byte("user@host")) {
+		t.Errorf("non-probe content lost: %q", history)
+	}
+}
+
 // Edge (非法输入 / 类似字节): raw "c", "n", "p", "q" characters in plain
 // text — anywhere `\x1b[` is absent — must never be stripped.
 func TestStripTerminalQueriesPlainTextUntouched(t *testing.T) {
